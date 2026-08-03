@@ -200,7 +200,8 @@ func checkAll(ctx context.Context, value paths, report reporter) (checkSummary, 
 		return checkSummary{}, err
 	}
 	results := map[string]checkResult{}
-	ids := sortedComponentIDs(loaded.Components)
+	ids := managedComponentIDs(value, loaded.Components)
+	total := len(ids) + 1
 	for index, id := range ids {
 		if err := ctx.Err(); err != nil {
 			_ = saveState(value.StatePath, cached)
@@ -208,7 +209,7 @@ func checkAll(ctx context.Context, value paths, report reporter) (checkSummary, 
 		}
 		item := loaded.Components[id]
 		if report != nil {
-			report(progress{Phase: "check", Component: id, Detail: "checking", Current: index, Total: len(ids)})
+			report(progress{Phase: "check", Component: id, Detail: "checking", Current: index, Total: total})
 		}
 		result := checkComponent(ctx, value, id, item, loaded.Defaults)
 		key := componentKey(id, item)
@@ -221,16 +222,42 @@ func checkAll(ctx context.Context, value paths, report reporter) (checkSummary, 
 		cached.Components[key] = entry
 		results[id] = result
 		if report != nil {
-			report(progress{Phase: "check", Component: id, Detail: result.Summary, Current: index + 1, Total: len(ids)})
+			report(progress{Phase: "check", Component: id, Detail: result.Summary, Current: index + 1, Total: total})
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		_ = saveState(value.StatePath, cached)
+		return checkSummary{}, err
+	}
+	if report != nil {
+		report(progress{Phase: "check", Component: selfUpdateComponentID, Detail: "checking", Current: len(ids), Total: total})
+	}
+	self := checkSelfUpdate(ctx, value, loaded.Defaults)
+	recordSelfUpdateCheck(&cached, self)
+	results[selfUpdateComponentID] = self
+	if report != nil {
+		report(progress{Phase: "check", Component: selfUpdateComponentID, Detail: self.Summary, Current: total, Total: total})
 	}
 	if err := saveState(value.StatePath, cached); err != nil {
 		return checkSummary{}, err
 	}
 	if report != nil {
-		report(progress{Phase: "complete", Detail: "check complete", Current: len(ids), Total: len(ids)})
+		report(progress{Phase: "complete", Detail: "check complete", Current: total, Total: total})
 	}
 	return checkSummary{Config: loaded, State: cached, Results: results}, nil
+}
+
+func managedComponentIDs(value paths, components map[string]component) []string {
+	ids := sortedComponentIDs(components)
+	output := ids[:0]
+	for _, id := range ids {
+		item := components[id]
+		if id == selfUpdateComponentID || item.Target != nil && pathOverlaps(*item.Target, value.PluginRoot) {
+			continue
+		}
+		output = append(output, id)
+	}
+	return output
 }
 
 func checkComponent(ctx context.Context, value paths, id string, item component, settings defaults) checkResult {

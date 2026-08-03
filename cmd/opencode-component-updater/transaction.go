@@ -109,6 +109,7 @@ func applyStagedPlan(ctx context.Context, value paths, settings config, plan upg
 		backup, err := os.MkdirTemp(filepath.Dir(componentPlan.Target), ".component-updater-backup-"+safeName(componentPlan.ID)+"-")
 		if err != nil {
 			cleanupStages(staged)
+			cleanupRawBackups(journal.Components)
 			return nil, err
 		}
 		journal.Components = append(journal.Components, journalComponent{
@@ -120,6 +121,7 @@ func applyStagedPlan(ctx context.Context, value paths, settings config, plan upg
 		})
 	}
 	if err := saveJournal(value, journal); err != nil {
+		// The journal may have been renamed before its directory sync failed; preserve recovery inputs.
 		return nil, err
 	}
 	failures := []string{}
@@ -199,6 +201,12 @@ func applyStagedPlan(ctx context.Context, value paths, settings config, plan upg
 		return failures, err
 	}
 	return failures, nil
+}
+
+func cleanupRawBackups(components []journalComponent) {
+	for _, component := range components {
+		_ = os.RemoveAll(component.RawBackup)
+	}
 }
 
 func applyJournalComponent(value paths, current *journal, componentJournal *journalComponent) error {
@@ -355,8 +363,21 @@ func finalizeCommittedTransaction(value paths, current *journal) error {
 	if err != nil {
 		return err
 	}
+	var selfApplied *appliedRecord
 	for _, componentJournal := range current.Components {
 		if !componentJournal.Committed {
+			continue
+		}
+		if componentJournal.Plan.SelfUpdate {
+			if componentJournal.ID == selfUpdateBinaryID || selfApplied == nil {
+				selfApplied = &appliedRecord{
+					AppliedAt: nowMillis(),
+					From:      componentJournal.Plan.Current,
+					To:        componentJournal.Plan.Latest,
+					RunID:     current.RunID,
+					Backup:    backupArchivePath(value, componentJournal.ID, current.RunID),
+				}
+			}
 			continue
 		}
 		entry := cached.Components[componentJournal.Plan.Key]
@@ -368,6 +389,14 @@ func finalizeCommittedTransaction(value paths, current *journal) error {
 			Backup:    backupArchivePath(value, componentJournal.ID, current.RunID),
 		}
 		cached.Components[componentJournal.Plan.Key] = entry
+	}
+	if selfApplied != nil {
+		entry := componentState{}
+		if cached.SelfUpdate != nil {
+			entry = *cached.SelfUpdate
+		}
+		entry.LastApplied = selfApplied
+		cached.SelfUpdate = &entry
 	}
 	if err := saveState(value.StatePath, cached); err != nil {
 		return err

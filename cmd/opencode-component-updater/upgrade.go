@@ -32,6 +32,7 @@ type plannedComponent struct {
 	PlanSHA256        string        `json:"planSha256"`
 	Stage             string        `json:"stage,omitempty"`
 	Manifest          stageManifest `json:"manifest,omitempty"`
+	SelfUpdate        bool          `json:"selfUpdate,omitempty"`
 }
 
 type stageManifest struct {
@@ -145,7 +146,7 @@ func buildUpgradePlan(ctx context.Context, value paths, summary checkSummary, be
 	}
 	plan := upgradePlan{SchemaVersion: 1, RunID: newRunID(), Mode: mode, CreatedAt: nowMillis()}
 	failures := []string{}
-	for _, id := range sortedComponentIDs(summary.Config.Components) {
+	for _, id := range managedComponentIDs(value, summary.Config.Components) {
 		item := summary.Config.Components[id]
 		if !eligibleForUpgrade(item) {
 			continue

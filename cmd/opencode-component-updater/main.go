@@ -66,6 +66,41 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "rollback":
+		componentID, err := parseRollbackArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 2
+		}
+		if err := runRollback(ctx, paths, componentID, stderr); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+			}
+			return 1
+		}
+		return 0
+	case "self-update":
+		action, expected, err := parseSelfUpdateArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 2
+		}
+		var runErr error
+		switch action {
+		case "check":
+			runErr = runSelfUpdateCheck(ctx, paths, stdout)
+		case "apply":
+			runErr = runSelfUpdate(ctx, paths, expected, stderr)
+		case "rollback":
+			runErr = runSelfUpdateRollback(ctx, paths, stderr)
+		}
+		if runErr != nil {
+			if !errors.Is(runErr, context.Canceled) {
+				fmt.Fprintf(stderr, "error: %v\n", runErr)
+			}
+			return 1
+		}
+		return 0
 	case "status":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "error: status takes no arguments")
@@ -119,10 +154,25 @@ func parseUpgradeArgs(args []string) (bool, error) {
 	return bestEffort, nil
 }
 
+func parseRollbackArgs(args []string) (string, error) {
+	if len(args) > 1 {
+		return "", errors.New("rollback accepts at most one component id")
+	}
+	if len(args) == 0 {
+		return "", nil
+	}
+	if args[0] == "" {
+		return "", errors.New("component id must not be empty")
+	}
+	return args[0], nil
+}
+
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, strings.TrimSpace(`Usage:
   opencode-component-updater check [--quiet]
   opencode-component-updater upgrade [--best-effort]
+  opencode-component-updater rollback [component-id]
+  opencode-component-updater self-update [check|apply [commit]|rollback]
   opencode-component-updater status
   opencode-component-updater doctor
   opencode-component-updater version`))

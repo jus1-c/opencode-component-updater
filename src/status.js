@@ -1,4 +1,7 @@
 import { readJson } from "./json.js";
+import { relative, resolve, sep } from "node:path";
+
+const selfUpdateId = "plugin.opencode-component-updater";
 
 function componentIdentity(id, component) {
   return `${component.scope || "global"}:${id}:${component.target || "external"}`;
@@ -22,6 +25,36 @@ export function statusForComponent({ id, component, state }) {
   return { id, key, component, cache, checked, status: checked.status, summary: checked.summary || checked.status };
 }
 
+function selfUpdateStatus(state) {
+  const cache = state.selfUpdate || {};
+  const checked = stateFor(cache);
+  return {
+    id: selfUpdateId,
+    key: "updater:self-update",
+    component: {
+      scope: "updater",
+      kind: "updater",
+      name: "opencode-component-updater",
+      target: checked.source?.root || null,
+    },
+    cache,
+    checked,
+    status: checked.status || "stale",
+    summary: checked.summary || "Not checked",
+  };
+}
+
+function overlapsUpdaterTarget(target, pluginRoot) {
+  if (typeof target !== "string" || !target || !pluginRoot) return false;
+  const left = resolve(target);
+  const right = resolve(pluginRoot);
+  const within = (root, candidate) => {
+    const path = relative(root, candidate);
+    return path === "" || (path !== ".." && !path.startsWith(`..${sep}`));
+  };
+  return within(left, right) || within(right, left);
+}
+
 export async function readStatus({ paths }) {
   const [config, state] = await Promise.all([
     readJson(paths.configPath, { defaults: {}, components: {} }),
@@ -31,9 +64,12 @@ export async function readStatus({ paths }) {
   return {
     state,
     checkIntervalHours: Number.isSafeInteger(config?.defaults?.checkIntervalHours) ? config.defaults.checkIntervalHours : 24,
-    components: Object.entries(components)
-      .map(([id, component]) => statusForComponent({ id, component, state }))
-      .sort((left, right) => left.id.localeCompare(right.id)),
+    components: [
+      selfUpdateStatus(state),
+      ...Object.entries(components)
+        .filter(([id, component]) => id !== selfUpdateId && !overlapsUpdaterTarget(component?.target, paths.pluginRoot))
+        .map(([id, component]) => statusForComponent({ id, component, state })),
+    ].sort((left, right) => left.id.localeCompare(right.id)),
   };
 }
 

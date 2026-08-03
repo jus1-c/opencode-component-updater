@@ -17,7 +17,7 @@ type openCodeRunningError struct {
 var findOpenCodeProcesses = listOpenCodeProcesses
 
 func (err *openCodeRunningError) Error() string {
-	lines := []string{"OpenCode is still running; close every OpenCode process before upgrading."}
+	lines := []string{"OpenCode is still running; close every OpenCode process before changing components."}
 	for _, process := range err.Processes {
 		lines = append(lines, fmt.Sprintf("pid %d: %s", process.PID, fallback(process.Executable, process.Command)))
 	}
@@ -92,7 +92,7 @@ func (model processGuardModel) View() tea.View {
 	for _, process := range model.processes {
 		lines = append(lines, fmt.Sprintf("%-6d %s", process.PID, fallback(process.Executable, process.Command)))
 	}
-	lines = append(lines, "", "Close every OpenCode process before upgrading.", "", "r: retry    q: exit")
+	lines = append(lines, "", "Close every OpenCode process before changing components.", "", "r: retry    q: exit")
 	return tea.NewView(strings.Join(lines, "\n") + "\n")
 }
 

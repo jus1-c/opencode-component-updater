@@ -27,6 +27,7 @@ type paths struct {
 	LockPath           string
 	RunsRoot           string
 	TmpRoot            string
+	PluginRoot         string
 }
 
 type defaults struct {
@@ -103,6 +104,7 @@ type componentState struct {
 type state struct {
 	SchemaVersion int                       `json:"schemaVersion"`
 	Components    map[string]componentState `json:"components"`
+	SelfUpdate    *componentState           `json:"selfUpdate,omitempty"`
 }
 
 func resolvePaths() (paths, error) {
@@ -115,8 +117,9 @@ func resolvePaths() (paths, error) {
 	opencodeRoot := envOr("OPENCODE_CONFIG_DIR", filepath.Join(configHome, "opencode"))
 	configPath := envOr("OPENCODE_COMPONENT_UPDATER_CONFIG", filepath.Join(opencodeRoot, "component-updater", "components.json"))
 	stateRoot := envOr("OPENCODE_COMPONENT_UPDATER_STATE_DIR", filepath.Join(stateHome, "opencode", "component-updater"))
+	pluginRoot := envOr("OPENCODE_COMPONENT_UPDATER_PLUGIN_DIR", filepath.Join(opencodeRoot, "plugins", "opencode-component-updater"))
 
-	for _, value := range []*string{&opencodeRoot, &configPath, &stateRoot} {
+	for _, value := range []*string{&opencodeRoot, &configPath, &stateRoot, &pluginRoot} {
 		absolute, err := filepath.Abs(*value)
 		if err != nil {
 			return paths{}, err
@@ -133,6 +136,7 @@ func resolvePaths() (paths, error) {
 		LockPath:           filepath.Join(stateRoot, "operation.lock"),
 		RunsRoot:           filepath.Join(stateRoot, "runs"),
 		TmpRoot:            filepath.Join(stateRoot, "tmp"),
+		PluginRoot:         pluginRoot,
 	}, nil
 }
 
@@ -141,6 +145,21 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func samePath(left, right string) bool {
+	left, leftErr := filepath.Abs(left)
+	right, rightErr := filepath.Abs(right)
+	return leftErr == nil && rightErr == nil && filepath.Clean(left) == filepath.Clean(right)
+}
+
+func pathOverlaps(left, right string) bool {
+	left, leftErr := filepath.Abs(left)
+	right, rightErr := filepath.Abs(right)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return within(filepath.Clean(left), filepath.Clean(right)) || within(filepath.Clean(right), filepath.Clean(left))
 }
 
 func defaultDefaults() defaults {
@@ -330,6 +349,7 @@ func loadState(path string) (state, error) {
 	var raw struct {
 		SchemaVersion int                        `json:"schemaVersion"`
 		Components    map[string]json.RawMessage `json:"components"`
+		SelfUpdate    json.RawMessage            `json:"selfUpdate"`
 	}
 	if err := json.Unmarshal(contents, &raw); err != nil {
 		return state{}, fmt.Errorf("parse state: %w", err)
@@ -362,6 +382,12 @@ func loadState(path string) (state, error) {
 				Current:   legacy.Current,
 				Latest:    legacy.Latest,
 			}}
+		}
+	}
+	if raw.SchemaVersion == stateSchemaVersion && len(raw.SelfUpdate) != 0 && string(raw.SelfUpdate) != "null" {
+		var self componentState
+		if json.Unmarshal(raw.SelfUpdate, &self) == nil {
+			output.SelfUpdate = &self
 		}
 	}
 	return output, nil

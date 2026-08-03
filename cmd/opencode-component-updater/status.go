@@ -14,10 +14,6 @@ func printStatus(value paths, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if !exists {
-		fmt.Fprintf(out, "Config: missing (%s)\n", value.ConfigPath)
-		return nil
-	}
 	cached, err := loadState(value.StatePath)
 	if err != nil {
 		return err
@@ -26,11 +22,21 @@ func printStatus(value paths, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Config: %s\n", value.ConfigPath)
+	if exists {
+		fmt.Fprintf(out, "Config: %s\n", value.ConfigPath)
+	} else {
+		fmt.Fprintf(out, "Config: missing (%s)\n", value.ConfigPath)
+	}
 	fmt.Fprintf(out, "OpenCode processes: %d\n", len(processes))
 	fmt.Fprintf(out, "Journal: %s\n", fileState(value.JournalPath))
 	fmt.Fprintf(out, "Backups: %d\n", backupCount(value.BackupRoot))
-	for _, id := range sortedComponentIDs(loaded.Components) {
+	if cached.SelfUpdate != nil {
+		printSelfUpdateStatus(out, *cached.SelfUpdate)
+	}
+	if !exists {
+		return nil
+	}
+	for _, id := range managedComponentIDs(value, loaded.Components) {
 		item := loaded.Components[id]
 		entry := cached.Components[componentKey(id, item)]
 		good := entry.LastGood
@@ -57,6 +63,26 @@ func printStatus(value paths, out io.Writer) error {
 	return nil
 }
 
+func printSelfUpdateStatus(out io.Writer, entry componentState) {
+	good := entry.LastGood
+	status := "not checked"
+	summary := "Not checked"
+	if good != nil {
+		status = good.Status
+		summary = good.Summary
+	}
+	fmt.Fprintf(out, "\n%s\n  status: %s\n  summary: %s\n", selfUpdateComponentID, status, summary)
+	if good != nil {
+		fmt.Fprintf(out, "  installed: %s\n  cached latest: %s\n  last good check: %s\n", fallback(good.Current, "unknown"), fallback(good.Latest, "unknown"), timestamp(good.CheckedAt))
+	}
+	if entry.LastAttempt != nil && (good == nil || entry.LastAttempt.CheckedAt != good.CheckedAt) {
+		fmt.Fprintf(out, "  last attempt: %s (%s)\n", timestamp(entry.LastAttempt.CheckedAt), entry.LastAttempt.Summary)
+	}
+	if entry.LastApplied != nil {
+		fmt.Fprintf(out, "  last applied: %s\n  last backup: %s\n", timestamp(entry.LastApplied.AppliedAt), fallback(entry.LastApplied.Backup, "none"))
+	}
+}
+
 func printDoctor(value paths, out io.Writer) error {
 	loaded, exists, err := loadConfig(value.ConfigPath)
 	if err != nil {
@@ -67,6 +93,7 @@ func printDoctor(value paths, out io.Writer) error {
 	fmt.Fprintf(out, "state: %s\n", fileState(value.StatePath))
 	fmt.Fprintf(out, "journal: %s\n", fileState(value.JournalPath))
 	fmt.Fprintf(out, "binary directory in PATH: %t\n", pathContainsExecutable())
+	fmt.Fprintf(out, "updater plugin directory: %s\n", doctorState(fileState(value.PluginRoot) == "present", value.PluginRoot))
 	if processErr != nil {
 		fmt.Fprintf(out, "opencode processes: error: %v\n", processErr)
 	} else {
@@ -76,7 +103,7 @@ func printDoctor(value paths, out io.Writer) error {
 		}
 	}
 	if exists {
-		ids := sortedComponentIDs(loaded.Components)
+		ids := managedComponentIDs(value, loaded.Components)
 		for _, id := range ids {
 			item := loaded.Components[id]
 			if item.Target == nil {

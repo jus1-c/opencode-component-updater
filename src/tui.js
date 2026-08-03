@@ -22,9 +22,12 @@ function showStatus(api, paths, readSnapshot, monitorError) {
   }).catch((error) => showAlert(api, "Component Status", String(error)));
 }
 
-export function runBinaryCheck({ binary = process.env.OPENCODE_COMPONENT_UPDATER_BIN || "opencode-component-updater" } = {}) {
+export function runBinaryCheck({ binary = process.env.OPENCODE_COMPONENT_UPDATER_BIN || "opencode-component-updater", pluginRoot } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, ["check", "--quiet"], { detached: false, shell: false, stdio: "ignore", windowsHide: true });
+    const env = pluginRoot && !process.env.OPENCODE_COMPONENT_UPDATER_PLUGIN_DIR
+      ? { ...process.env, OPENCODE_COMPONENT_UPDATER_PLUGIN_DIR: pluginRoot }
+      : process.env;
+    const child = spawn(binary, ["check", "--quiet"], { detached: false, shell: false, stdio: "ignore", windowsHide: true, env });
     child.once("error", reject);
     child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`${binary} check exited ${code}`)));
   });
@@ -46,7 +49,7 @@ export function createTuiPlugin({
       if (checking) return;
       checking = true;
       try {
-        await runCheck();
+        await runCheck({ pluginRoot: paths.pluginRoot });
         monitorError = null;
         const snapshot = await readSnapshot({ paths });
         const available = snapshot.components.filter((item) => item.status === "update-available");

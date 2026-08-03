@@ -6,6 +6,7 @@ test("registers status only and delegates automatic checks to the binary", async
   const commands = [];
   const lifecycle = [];
   let checks = 0;
+  let checkOptions;
   let scheduled;
   let cleared = 0;
   const api = {
@@ -21,7 +22,7 @@ test("registers status only and delegates automatic checks to the binary", async
   const tui = createTuiPlugin({
     pluginRoot: "/lab/plugin",
     readSnapshot: async () => ({ checkIntervalHours: 24, components: [] }),
-    runCheck: async () => { checks += 1; },
+    runCheck: async (options) => { checks += 1; checkOptions = options; },
     setIntervalImpl: (callback, interval) => {
       scheduled = { callback, interval };
       return { unref() {} };
@@ -33,6 +34,7 @@ test("registers status only and delegates automatic checks to the binary", async
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(commands.map((command) => command.slashName), ["component_status"]);
   assert.equal(checks, 1);
+  assert.deepEqual(checkOptions, { pluginRoot: "/lab/plugin" });
   assert.equal(scheduled.interval, 24 * 60 * 60 * 1_000);
 
   scheduled.callback();

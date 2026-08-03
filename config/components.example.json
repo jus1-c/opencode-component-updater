@@ -1,13 +1,10 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "defaults": {
     "checkIntervalHours": 24,
     "checkTimeoutMs": 60000,
     "updateTimeoutMs": 1800000,
-    "toastDurationMs": 10000,
-    "maxOutputBytes": 65536,
-    "instanceHeartbeatMs": 15000,
-    "staleInstanceMs": 90000
+    "maxOutputBytes": 65536
   },
   "components": {}
 }
