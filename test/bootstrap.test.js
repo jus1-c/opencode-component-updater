@@ -1,0 +1,80 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadRuntimePlugin } from "../bootstrap/loader.js";
+import { resolveBootstrapPaths } from "../bootstrap/paths.js";
+import { BASELINE_RUNTIME, normalizeSelfState } from "../bootstrap/state.js";
+
+async function writeRuntime(root, name) {
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, "runtime.js"), [
+    "export const BOOTSTRAP_API = 1;",
+    `export function createRuntimePlugin() { return { id: "opencode-component-updater", tui: () => "${name}" }; }`,
+  ].join("\n"));
+}
+
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), "component-updater-bootstrap-"));
+  const pluginRoot = join(root, "plugin");
+  const paths = resolveBootstrapPaths({ pluginRoot, env: {}, home: root });
+  await writeRuntime(pluginRoot, "baseline");
+  return { paths, pluginRoot };
+}
+
+test("loads the immutable baseline runtime by default", async () => {
+  const { paths, pluginRoot } = await fixture();
+  const plugin = await loadRuntimePlugin({ pluginRoot, paths });
+  assert.equal(plugin.tui(), "baseline");
+});
+
+test("loads the selected versioned runtime", async () => {
+  const { paths, pluginRoot } = await fixture();
+  const commit = "a".repeat(40);
+  await writeRuntime(join(paths.versionsRoot, commit), "candidate");
+  await mkdir(join(paths.stateRoot), { recursive: true });
+  await writeFile(paths.selfStatePath, JSON.stringify({
+    schemaVersion: 1,
+    current: commit,
+    previous: BASELINE_RUNTIME,
+    candidate: null,
+  }));
+
+  const plugin = await loadRuntimePlugin({ pluginRoot, paths });
+  assert.equal(plugin.tui(), "candidate");
+});
+
+test("falls back to the previous runtime when selected runtime is invalid", async () => {
+  const { paths, pluginRoot } = await fixture();
+  const commit = "b".repeat(40);
+  await mkdir(join(paths.versionsRoot, commit), { recursive: true });
+  await writeFile(join(paths.versionsRoot, commit, "runtime.js"), "export const BOOTSTRAP_API = 2;\n");
+  await mkdir(join(paths.stateRoot), { recursive: true });
+  await writeFile(paths.selfStatePath, JSON.stringify({
+    schemaVersion: 1,
+    current: commit,
+    previous: BASELINE_RUNTIME,
+    candidate: null,
+  }));
+
+  const plugin = await loadRuntimePlugin({ pluginRoot, paths });
+  assert.equal(plugin.tui(), "baseline");
+});
+
+test("normalizes untrusted self-update state", () => {
+  assert.deepEqual(normalizeSelfState({
+    schemaVersion: 1,
+    current: "not-a-commit",
+    previous: "f".repeat(40),
+    candidate: "not-a-commit",
+  }), {
+    schemaVersion: 1,
+    baselineCommit: null,
+    current: BASELINE_RUNTIME,
+    previous: "f".repeat(40),
+    candidate: null,
+    lastFailure: null,
+  });
+});
