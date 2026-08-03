@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { createConfig } from "../src/config.js";
 import { createLease } from "../src/lease.js";
 import { resolveUpdaterPaths } from "../src/paths.js";
-import { applyPending, loadPending, stageComponent, validateManifest } from "../src/transaction.js";
+import { applyPending, loadPending, savePending, stageComponent, validateManifest } from "../src/transaction.js";
 
 async function write(path, text) {
   await mkdir(join(path, ".."), { recursive: true });
@@ -84,6 +84,42 @@ test("refuses to stage disabled components", async () => {
     stageComponent({ paths, config, id: "plugin.example", run: stagedRunner() }),
     /is disabled/,
   );
+});
+
+test("refuses to self-stage through the generic component transaction", async () => {
+  const { paths, config } = await fixture();
+  config.components["plugin.component-updater"] = {
+    ...config.components["plugin.example"],
+    name: "component-updater",
+  };
+  await assert.rejects(
+    stageComponent({ paths, config, id: "plugin.component-updater", run: stagedRunner() }),
+    /dedicated updater self-update flow/,
+  );
+});
+
+test("refuses legacy generic self-pending updates at shutdown", async () => {
+  const { paths, config, target } = await fixture();
+  config.components["plugin.component-updater"] = {
+    ...config.components["plugin.example"],
+    name: "component-updater",
+    target,
+  };
+  await savePending(paths, {
+    schemaVersion: 1,
+    updates: {
+      "plugin.component-updater": {
+        id: "plugin.component-updater",
+        target,
+        stage: join(target, "stage"),
+        manifest: { schemaVersion: 1, paths: ["runtime"] },
+        jobId: "legacy",
+      },
+    },
+  });
+  const result = await applyPending({ paths, config });
+  assert.equal(result.failed[0].id, "plugin.component-updater");
+  assert.match(result.failed[0].error, /only at startup/);
 });
 
 test("rejects manifests that target protected or escaping paths", async () => {

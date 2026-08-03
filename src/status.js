@@ -65,3 +65,21 @@ export function formatStatusDetail(item, { instanceCount, checkIntervalHours = 2
     `Active OpenCode instances: ${instanceCount}`,
   ].join("\n");
 }
+
+export function formatSelfUpdateStatus(self) {
+  const checked = self.lastCheck?.checkedAt ? new Date(self.lastCheck.checkedAt).toISOString() : "never";
+  const running = self.current || self.running || "unknown";
+  return [
+    "Component: plugin.component-updater",
+    "Kind: plugin",
+    "Apply path: startup-only",
+    "",
+    `Running commit: ${running}`,
+    `Previous runtime: ${self.previous || "none"}`,
+    `Staged commit: ${self.candidate || "none"}`,
+    `Latest checked: ${self.lastCheck?.latest || "unknown"}`,
+    `Check status: ${self.lastCheck?.status || "not checked"}`,
+    `Last check: ${checked}`,
+    `Last failure: ${self.lastFailure || "none"}`,
+  ].join("\n");
+}

@@ -3,6 +3,7 @@ import { dirname, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { BOOTSTRAP_API } from "./constants.js";
 import { acquireBootstrapLock } from "./lock.js";
+import { firstOutputLine } from "./process.js";
 import { createRuntimeManifest, RUNTIME_MANIFEST_FILE, runtimePath, verifyRuntime } from "./runtime.js";
 import { resolveBootstrapPaths } from "./paths.js";
 import { isCommit, loadSelfState, saveSelfState } from "./state.js";
@@ -11,12 +12,8 @@ const BRANCH = "main";
 const TIMEOUT_MS = 1_800_000;
 const MAX_OUTPUT_BYTES = 65_536;
 
-function firstLine(output) {
-  return `${output.stdout || ""}\n${output.stderr || ""}`.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
-}
-
 function parseCommit(output) {
-  return firstLine(output).match(/^([0-9a-f]{40})(?:\s|$)/i)?.[1]?.toLowerCase() || null;
+  return firstOutputLine(output).match(/^([0-9a-f]{40})(?:\s|$)/i)?.[1]?.toLowerCase() || null;
 }
 
 function sanitizeRemote(value) {
@@ -46,7 +43,7 @@ function repositoryUrl(pkg) {
 
 async function runChecked(run, command, options, label) {
   const output = await run(command, { timeoutMs: TIMEOUT_MS, maxOutputBytes: MAX_OUTPUT_BYTES, ...options });
-  if (output.code !== 0 || output.reason) throw new Error(`${label}: ${firstLine(output) || output.reason || `exit ${output.code}`}`);
+  if (output.code !== 0 || output.reason) throw new Error(`${label}: ${firstOutputLine(output) || output.reason || `exit ${output.code}`}`);
   return output;
 }
 
@@ -101,16 +98,22 @@ async function assertCandidatePackage(source) {
 export function createSelfUpdater({ pluginRoot, paths = resolveBootstrapPaths({ pluginRoot }), run, now = Date.now } = {}) {
   if (typeof run !== "function") throw new Error("Self updater requires a command runner");
 
-  async function check() {
+  async function check({ force = false, intervalHours = 24 } = {}) {
     const state = await loadSelfState(paths);
+    const intervalMs = intervalHours * 60 * 60 * 1_000;
+    if (!force && state.lastCheck?.checkedAt && now() - state.lastCheck.checkedAt < intervalMs) {
+      return { ...state.lastCheck, skipped: true };
+    }
     const pkg = await readPackage(paths.pluginRoot);
     const remote = repositoryUrl(pkg);
     const current = await currentCommit(paths, state, run);
     const output = await run(["git", "ls-remote", remote, `refs/heads/${BRANCH}`], { timeoutMs: 30_000, maxOutputBytes: 8_192 });
     const latest = output.code === 0 ? parseCommit(output) : null;
-    const result = latest
-      ? { status: current === latest ? "current" : "update-available", summary: current ? `${current.slice(0, 7)} -> ${latest.slice(0, 7)}` : `unknown -> ${latest.slice(0, 7)}`, current, latest }
-      : { status: "check-error", summary: firstLine(output) || output.reason || "git ls-remote failed", current, latest: null };
+    const result = latest && current
+      ? { status: current === latest ? "current" : "update-available", summary: `${current.slice(0, 7)} -> ${latest.slice(0, 7)}`, current, latest }
+      : latest
+        ? { status: "manual-only", summary: `Running updater commit unknown; latest is ${latest.slice(0, 7)}`, current: null, latest }
+      : { status: "check-error", summary: firstOutputLine(output) || output.reason || "git ls-remote failed", current, latest: null };
     await saveSelfState(paths, {
       ...state,
       baselineCommit: state.baselineCommit || (state.current === "baseline" ? current : null),
@@ -153,11 +156,9 @@ export function createSelfUpdater({ pluginRoot, paths = resolveBootstrapPaths({ 
       const ancestry = await run(["git", "merge-base", "--is-ancestor", current, commit], { cwd: source, timeoutMs: 30_000, maxOutputBytes: 8_192 });
       if (ancestry.code !== 0) throw new Error("Remote main is not a fast-forward from the running updater");
       await assertCandidatePackage(source);
-      await runChecked(run, ["npm", "run", "check"], { cwd: source }, "Candidate check failed");
-      await runChecked(run, ["npm", "test"], { cwd: source }, "Candidate test failed");
       await copyPayload(source, payload);
       for (const file of await filesIn(payload)) {
-        if (file.endsWith(".js")) await runChecked(run, ["node", "--check", file], {}, "Syntax check failed");
+        if (file.endsWith(".js") || file.endsWith(".mjs")) await runChecked(run, ["node", "--check", file], {}, "Syntax check failed");
       }
       const manifest = await createRuntimeManifest(payload, commit);
       await writeFile(join(payload, RUNTIME_MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -177,8 +178,20 @@ export function createSelfUpdater({ pluginRoot, paths = resolveBootstrapPaths({ 
 
   async function status() {
     const state = await loadSelfState(paths);
-    return { ...state, current: await currentCommit(paths, state, run) || state.current };
+    return {
+      ...state,
+      running: state.current,
+      current: state.current === "baseline" ? state.baselineCommit : state.current,
+    };
   }
 
-  return { check, stage, status };
+  async function rollback() {
+    const state = await loadSelfState(paths);
+    if (state.current === "baseline" || !state.previous) return { skipped: true, reason: "no previous updater runtime" };
+    if (state.candidate) return { skipped: true, reason: "another self-update is already staged" };
+    await saveSelfState(paths, { ...state, candidate: state.previous, lastFailure: null });
+    return { skipped: false, commit: state.previous, summary: "Previous updater runtime staged; restart OpenCode to activate" };
+  }
+
+  return { check, stage, status, rollback };
 }

@@ -128,6 +128,33 @@ test("startup backfills newly discovered components without replacing config", a
   await app.dispose();
 });
 
+test("stage available excludes the updater self component", async () => {
+  const { paths, target } = await fixture();
+  const config = await (await import("../src/config.js")).loadConfig(paths);
+  config.components["plugin.component-updater"] = {
+    ...config.components["plugin.example"],
+    name: "component-updater",
+    target,
+  };
+  await (await import("../src/config.js")).saveConfig(paths, config);
+  let stages = 0;
+  const app = createUpdaterApp({
+    paths,
+    inventory: async () => ({ records: [] }),
+    run: async (_command, options) => {
+      if (options?.env?.OPENCODE_UPDATER_STAGE) stages += 1;
+      return { code: 0, stdout: "", stderr: "", reason: null };
+    },
+    setIntervalImpl: () => ({ unref() {} }),
+    clearIntervalImpl() {},
+  });
+  await app.start();
+  const result = await app.stageAvailable();
+  assert.deepEqual(result, []);
+  assert.equal(stages, 0);
+  await app.dispose();
+});
+
 test("scheduled checks report failures instead of rejecting unhandled", async () => {
   const { paths } = await fixture();
   const events = [];

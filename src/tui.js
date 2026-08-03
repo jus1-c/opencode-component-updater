@@ -1,14 +1,23 @@
 import { createUpdaterApp } from "./app.js";
-import { formatStatusDetail } from "./status.js";
+import { formatSelfUpdateStatus, formatStatusDetail } from "./status.js";
 import { resolveUpdaterPaths } from "./paths.js";
 
 function showAlert(api, title, message) {
   api.ui.dialog.replace(() => api.ui.DialogAlert({ title, message }));
 }
 
-function showStatus(api, app) {
-  void app.status().then((snapshot) => {
-    const options = snapshot.components.map((item) => ({
+function showStatus(api, app, selfUpdater) {
+  void Promise.all([app.status(), selfUpdater?.status().catch(() => null)]).then(([snapshot, self]) => {
+    const options = [
+      ...(self ? [{
+        title: `plugin.component-updater  ${self.candidate ? "staged-pending-restart" : self.lastCheck?.status || "not checked"}`,
+        value: "plugin.component-updater",
+        description: self.lastCheck?.summary || self.lastFailure || "Self-update status",
+        onSelect: () => showAlert(api, "plugin.component-updater", formatSelfUpdateStatus(self)),
+      }] : []),
+      ...snapshot.components
+        .filter((item) => item.id !== "plugin.component-updater")
+        .map((item) => ({
       title: `${item.id}  ${item.status}`,
       value: item.id,
       description: item.summary,
@@ -16,7 +25,8 @@ function showStatus(api, app) {
         instanceCount: snapshot.instances.length,
         checkIntervalHours: snapshot.checkIntervalHours,
       })),
-    }));
+        })),
+    ];
     api.ui.dialog.replace(() => api.ui.DialogSelect({
       title: "Component Status",
       placeholder: "Select a component",
@@ -25,9 +35,64 @@ function showStatus(api, app) {
   }).catch((error) => showAlert(api, "Component Status", String(error)));
 }
 
-function showUpdates(api, app) {
+function checkSelfUpdate(api, selfUpdater) {
+  if (!selfUpdater) return;
+  api.ui.dialog.clear();
+  api.ui.toast({ title: "Updater self-update", message: "Checking GitHub main", variant: "info" });
+  void selfUpdater.check({ force: true }).then((result) => {
+    if (result.status === "current") {
+      api.ui.toast({ title: "Updater self-update", message: "Already current", variant: "success" });
+      return;
+    }
+    if (result.status !== "update-available") {
+      showAlert(api, "Updater self-update", result.summary);
+      return;
+    }
+    api.ui.dialog.replace(() => api.ui.DialogConfirm({
+      title: "Stage updater self-update?",
+      message: `Commit: ${result.latest}\n\nCurrent runtime stays active. The checked commit activates only after every OpenCode instance closes and OpenCode starts again.`,
+      onConfirm: () => {
+        api.ui.dialog.clear();
+        api.ui.toast({ title: "Updater self-update", message: "Staging checked commit", variant: "info" });
+        void selfUpdater.stage(result.latest).then((staged) => {
+          api.ui.toast({ title: "Updater self-update", message: staged.summary || staged.reason, variant: "success" });
+        }).catch((error) => api.ui.toast({ title: "Updater self-update", message: String(error), variant: "error" }));
+      },
+    }));
+  }).catch((error) => api.ui.toast({ title: "Updater self-update", message: String(error), variant: "error" }));
+}
+
+function rollbackSelfUpdate(api, selfUpdater) {
+  if (!selfUpdater) return;
+  api.ui.dialog.replace(() => api.ui.DialogConfirm({
+    title: "Stage updater rollback?",
+    message: "The previous updater runtime will activate after every OpenCode instance closes and OpenCode starts again.",
+    onConfirm: () => {
+      api.ui.dialog.clear();
+      void selfUpdater.rollback().then((result) => {
+        api.ui.toast({ title: "Updater self-update", message: result.summary || result.reason, variant: result.skipped ? "info" : "success" });
+      }).catch((error) => api.ui.toast({ title: "Updater self-update", message: String(error), variant: "error" }));
+    },
+  }));
+}
+
+function showUpdates(api, app, selfUpdater) {
   void app.status().then((snapshot) => {
     const options = [
+      ...(selfUpdater ? [
+        {
+          title: "Check updater self-update",
+          value: "self-check",
+          description: "Check GitHub main, then offer manual exact-SHA staging",
+          onSelect: () => checkSelfUpdate(api, selfUpdater),
+        },
+        {
+          title: "Rollback updater",
+          value: "self-rollback",
+          description: "Stage the previous updater runtime for next startup",
+          onSelect: () => rollbackSelfUpdate(api, selfUpdater),
+        },
+      ] : []),
       {
         title: "Check now",
         value: "check",
@@ -55,7 +120,7 @@ function showUpdates(api, app) {
         },
       },
       ...snapshot.components
-        .filter((item) => item.status === "update-available")
+        .filter((item) => item.id !== "plugin.component-updater" && item.status === "update-available")
         .map((item) => ({
           title: `${item.id}  ${item.summary}`,
           value: item.id,
@@ -82,7 +147,13 @@ function showUpdates(api, app) {
   }).catch((error) => showAlert(api, "Component Updates", String(error)));
 }
 
-export function createTuiPlugin({ pluginRoot, createApp = createUpdaterApp } = {}) {
+export function createTuiPlugin({
+  pluginRoot,
+  createApp = createUpdaterApp,
+  selfUpdater,
+  setIntervalImpl = setInterval,
+  clearIntervalImpl = clearInterval,
+} = {}) {
   return async (api) => {
     const app = createApp({
       paths: resolveUpdaterPaths({ pluginRoot }),
@@ -111,7 +182,7 @@ export function createTuiPlugin({ pluginRoot, createApp = createUpdaterApp } = {
           category: "Plugin",
           namespace: "palette",
           slashName: "component_updates",
-          run: () => showUpdates(api, app),
+          run: () => showUpdates(api, app, selfUpdater),
         },
         {
           name: "component-updater.status",
@@ -119,7 +190,7 @@ export function createTuiPlugin({ pluginRoot, createApp = createUpdaterApp } = {
           category: "Plugin",
           namespace: "palette",
           slashName: "component_status",
-          run: () => showStatus(api, app),
+          run: () => showStatus(api, app, selfUpdater),
         },
       ],
     });
@@ -127,5 +198,16 @@ export function createTuiPlugin({ pluginRoot, createApp = createUpdaterApp } = {
     void app.start().catch((error) => {
       api.ui.toast({ title: "Component updates", message: String(error), variant: "error" });
     });
+    if (selfUpdater) {
+      const checkSelf = () => void selfUpdater.check().then((result) => {
+        if (!result.skipped && result.status === "update-available") {
+          api.ui.toast({ title: "Updater self-update", message: `Update available: ${result.summary}`, variant: "warning" });
+        }
+      }).catch(() => {});
+      checkSelf();
+      const timer = setIntervalImpl(checkSelf, 24 * 60 * 60 * 1_000);
+      timer.unref?.();
+      api.lifecycle.onDispose(() => clearIntervalImpl(timer));
+    }
   };
 }

@@ -45,7 +45,7 @@ export function normalizeSelfState(input) {
     baselineCommit: isCommit(input.baselineCommit),
     current,
     previous: runtime(input.previous, null),
-    candidate: isCommit(input.candidate),
+    candidate: runtime(input.candidate, null),
     lastFailure: typeof input.lastFailure === "string" ? input.lastFailure : null,
     lastCheck: check(input.lastCheck),
   };

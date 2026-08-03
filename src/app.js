@@ -6,6 +6,8 @@ import { runCommand } from "./process.js";
 import { readStatus } from "./status.js";
 import { applyPending, stageComponent } from "./transaction.js";
 
+const SELF_COMPONENT_ID = "plugin.component-updater";
+
 function message(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -97,7 +99,7 @@ export function createUpdaterApp({
   async function stageAvailable() {
     await ensureReady();
     const snapshot = await status();
-    const updates = snapshot.components.filter((item) => item.status === "update-available" && config.components[item.id].update.command.length);
+    const updates = snapshot.components.filter((item) => item.id !== SELF_COMPONENT_ID && item.status === "update-available" && config.components[item.id].update.command.length);
     const results = [];
     for (const item of updates) {
       try {

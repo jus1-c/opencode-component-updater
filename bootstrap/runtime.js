@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BOOTSTRAP_API } from "./constants.js";
 import { isCommit } from "./state.js";
@@ -12,6 +12,9 @@ function relativePath(root, path) {
 }
 
 function allowedPath(path) {
+  if (typeof path !== "string" || !path || isAbsolute(path) || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === "..")) {
+    return false;
+  }
   return path === "runtime.js" || path === "package.json" || path.startsWith("src/");
 }
 

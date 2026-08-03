@@ -23,11 +23,13 @@ export async function activateCandidate({ pluginRoot, paths = resolveBootstrapPa
       await saveSelfState(paths, { ...state, candidate: null, lastFailure: null });
       return { skipped: true, reason: "candidate already active", commit: state.current };
     }
-    try {
-      await validateRuntimeModule(paths, state.candidate);
-    } catch (error) {
-      await saveSelfState(paths, { ...state, candidate: null, lastFailure: failure(error) });
-      return { skipped: true, reason: "candidate rejected", error: failure(error) };
+    if (state.candidate !== BASELINE_RUNTIME) {
+      try {
+        await validateRuntimeModule(paths, state.candidate);
+      } catch (error) {
+        await saveSelfState(paths, { ...state, candidate: null, lastFailure: failure(error) });
+        return { skipped: true, reason: "candidate rejected", error: failure(error) };
+      }
     }
     const previous = state.current || BASELINE_RUNTIME;
     await saveSelfState(paths, { ...state, current: state.candidate, previous, candidate: null, lastFailure: null });

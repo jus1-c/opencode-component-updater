@@ -9,13 +9,14 @@ import { loadRuntimePlugin } from "../bootstrap/loader.js";
 import { resolveBootstrapPaths } from "../bootstrap/paths.js";
 import { createRuntimeManifest, RUNTIME_MANIFEST_FILE, runtimePath } from "../bootstrap/runtime.js";
 import { loadSelfState, saveSelfState } from "../bootstrap/state.js";
+import { createSelfUpdater } from "../bootstrap/self-update.js";
 
-async function writeRuntime(root, name, { manifest = false, commit } = {}) {
+async function writeRuntime(root, name, { manifest = false, commit, throws = false } = {}) {
   await mkdir(root, { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }));
   await writeFile(join(root, "runtime.js"), [
     "export const BOOTSTRAP_API = 1;",
-    `export function createRuntimePlugin() { return { id: "opencode-component-updater", tui: () => "${name}" }; }`,
+    `export function createRuntimePlugin() { return { id: "opencode-component-updater", tui: () => ${throws ? `(() => { throw new Error("${name} failed"); })()` : JSON.stringify(name)} }; }`,
   ].join("\n"));
   if (manifest) {
     await writeFile(join(root, RUNTIME_MANIFEST_FILE), JSON.stringify(await createRuntimeManifest(root, commit)));
@@ -43,7 +44,7 @@ test("promotes a verified candidate before loading the runtime", async () => {
   await saveSelfState(paths, { schemaVersion: 1, current: "baseline", previous: null, candidate: commit });
 
   const plugin = await loadRuntimePlugin({ pluginRoot, paths });
-  assert.equal(plugin.tui(), "candidate");
+  assert.equal(await plugin.tui(), "candidate");
   assert.deepEqual(await loadSelfState(paths), {
     schemaVersion: 1,
     baselineCommit: null,
@@ -91,9 +92,40 @@ test("loader rolls a corrupt active runtime back to baseline", async () => {
   await saveSelfState(paths, { schemaVersion: 1, current: commit, previous: "baseline", candidate: null });
 
   const plugin = await loadRuntimePlugin({ pluginRoot, paths });
-  assert.equal(plugin.tui(), "baseline");
+  assert.equal(await plugin.tui(), "baseline");
   const state = await loadSelfState(paths);
   assert.equal(state.current, "baseline");
   assert.match(state.lastFailure, /hash mismatch/);
   assert.equal(await readFile(join(pluginRoot, "runtime.js"), "utf8").then((text) => text.includes("baseline")), true);
+});
+
+test("loader rolls back when the active runtime fails during TUI initialization", async () => {
+  const { paths, pluginRoot } = await fixture();
+  const commit = "f".repeat(40);
+  const root = runtimePath(paths, commit);
+  await writeRuntime(root, "candidate", { manifest: true, commit, throws: true });
+  await saveSelfState(paths, { schemaVersion: 1, current: commit, previous: "baseline", candidate: null });
+
+  const plugin = await loadRuntimePlugin({ pluginRoot, paths });
+  assert.equal(await plugin.tui(), "baseline");
+  const state = await loadSelfState(paths);
+  assert.equal(state.current, "baseline");
+  assert.match(state.lastFailure, /candidate failed/);
+});
+
+test("stages rollback to the previous runtime for the next startup", async () => {
+  const { paths, pluginRoot } = await fixture();
+  const commit = "e".repeat(40);
+  await candidate(paths, commit);
+  await saveSelfState(paths, { schemaVersion: 1, current: commit, previous: "baseline", candidate: null });
+  const selfUpdater = createSelfUpdater({ pluginRoot, paths, run: async () => ({ code: 1, stdout: "", stderr: "" }) });
+
+  const rollback = await selfUpdater.rollback();
+  assert.equal(rollback.commit, "baseline");
+  assert.equal((await loadSelfState(paths)).candidate, "baseline");
+  const activated = await activateCandidate({ pluginRoot, paths });
+  assert.equal(activated.commit, "baseline");
+  const state = await loadSelfState(paths);
+  assert.equal(state.current, "baseline");
+  assert.equal(state.previous, commit);
 });

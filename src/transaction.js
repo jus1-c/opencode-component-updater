@@ -9,6 +9,7 @@ import { componentIdentity, loadState, saveState } from "./state.js";
 
 const MANIFEST_FILE = ".opencode-component-updater-manifest.json";
 const PENDING_SCHEMA_VERSION = 1;
+const SELF_COMPONENT_ID = "plugin.component-updater";
 
 function safeName(value) {
   return value.replace(/[^A-Za-z0-9._-]+/g, "-");
@@ -155,6 +156,7 @@ async function runHealthcheck(component, id, stage, manifest, defaults, { run, s
 }
 
 export async function stageComponent({ paths, config, id, run = runCommand, signal, now = Date.now }) {
+  if (id === SELF_COMPONENT_ID) throw new Error("Use the dedicated updater self-update flow");
   const component = config.components[id];
   if (!component) throw new Error(`Unknown component: ${id}`);
   if (!component.enabled) throw new Error(`Component ${id} is disabled`);
@@ -300,6 +302,7 @@ export async function applyPending({ paths, config, now = Date.now, move = renam
     for (const [id, update] of Object.entries(pending.updates)) {
       const component = config.components[id];
       try {
+        if (id === SELF_COMPONENT_ID) throw new Error("Updater self-updates apply only at startup");
         if (!component || component.policy.apply !== "manifest") throw new Error(`Component config unavailable: ${id}`);
         const outcome = await applyStagedUpdate({ component, update, move });
         delete pending.updates[id];

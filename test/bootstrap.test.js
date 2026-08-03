@@ -28,7 +28,7 @@ async function fixture() {
 test("loads the immutable baseline runtime by default", async () => {
   const { paths, pluginRoot } = await fixture();
   const plugin = await loadRuntimePlugin({ pluginRoot, paths });
-  assert.equal(plugin.tui(), "baseline");
+  assert.equal(await plugin.tui(), "baseline");
 });
 
 test("loads the selected versioned runtime", async () => {
@@ -49,7 +49,7 @@ test("loads the selected versioned runtime", async () => {
   }));
 
   const plugin = await loadRuntimePlugin({ pluginRoot, paths });
-  assert.equal(plugin.tui(), "candidate");
+  assert.equal(await plugin.tui(), "candidate");
 });
 
 test("falls back to the previous runtime when selected runtime is invalid", async () => {
@@ -66,7 +66,7 @@ test("falls back to the previous runtime when selected runtime is invalid", asyn
   }));
 
   const plugin = await loadRuntimePlugin({ pluginRoot, paths });
-  assert.equal(plugin.tui(), "baseline");
+  assert.equal(await plugin.tui(), "baseline");
 });
 
 test("normalizes untrusted self-update state", () => {
@@ -84,4 +84,22 @@ test("normalizes untrusted self-update state", () => {
     lastFailure: null,
     lastCheck: null,
   });
+});
+
+test("rejects manifest paths that could escape a versioned runtime", async () => {
+  const { paths } = await fixture();
+  const commit = "c".repeat(40);
+  const runtime = join(paths.versionsRoot, commit);
+  await writeRuntime(runtime, "candidate");
+  await writeFile(join(runtime, "package.json"), JSON.stringify({ type: "module" }));
+  await mkdir(join(runtime, "src"));
+  await writeFile(join(runtime, "src", "placeholder.js"), "export {};\n");
+  const manifest = await createRuntimeManifest(runtime, commit);
+  manifest.files[0].path = "src/../runtime.js";
+  await writeFile(join(runtime, RUNTIME_MANIFEST_FILE), JSON.stringify(manifest));
+  await mkdir(join(paths.stateRoot), { recursive: true });
+  await writeFile(paths.selfStatePath, JSON.stringify({ schemaVersion: 1, current: commit, previous: BASELINE_RUNTIME }));
+
+  const plugin = await loadRuntimePlugin({ pluginRoot: paths.pluginRoot, paths });
+  assert.equal(await plugin.tui(), "baseline");
 });

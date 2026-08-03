@@ -5,6 +5,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSelfUpdater } from "../bootstrap/self-update.js";
+import { loadRuntimePlugin } from "../bootstrap/loader.js";
 import { runtimePath, verifyRuntime } from "../bootstrap/runtime.js";
 import { resolveBootstrapPaths } from "../bootstrap/paths.js";
 import { loadSelfState } from "../bootstrap/state.js";
@@ -114,6 +115,22 @@ test("stages the checked SHA even when main advances after the check", async () 
   assert.notEqual(staged.commit, newerCommit);
 });
 
+test("activates the staged runtime only on the next loader startup", async () => {
+  const lab = await fixture();
+  const latest = await pushVersion(lab, "two");
+  const updater = createSelfUpdater({ pluginRoot: lab.pluginRoot, paths: lab.paths, run: runCommand });
+  await updater.check();
+  await updater.stage();
+
+  assert.match(await readFile(join(lab.pluginRoot, "src", "tui.js"), "utf8"), /one/);
+  const plugin = await loadRuntimePlugin({ pluginRoot: lab.pluginRoot, paths: lab.paths });
+  assert.equal(await plugin.tui(), "two");
+  const state = await loadSelfState(lab.paths);
+  assert.equal(state.current, latest);
+  assert.equal(state.previous, "baseline");
+  assert.equal(state.candidate, null);
+});
+
 test("rejects a rewritten main branch", async () => {
   const lab = await fixture();
   await git(["checkout", "--orphan", "rewrite"], { cwd: lab.source });
@@ -143,4 +160,24 @@ test("does not stage a commit that was not returned by the latest check", async 
   await assert.rejects(updater.stage("f".repeat(40)), /does not match/);
   assert.equal((await loadSelfState(lab.paths)).candidate, null);
   await updater.stage(latest);
+});
+
+test("uses cached self-check results until the daily interval expires", async () => {
+  const lab = await fixture();
+  await pushVersion(lab, "two");
+  let clock = 1_000;
+  let remoteChecks = 0;
+  const run = async (command, options) => {
+    if (command[0] === "git" && command[1] === "ls-remote") remoteChecks += 1;
+    return runCommand(command, options);
+  };
+  const updater = createSelfUpdater({ pluginRoot: lab.pluginRoot, paths: lab.paths, run, now: () => clock });
+  const first = await updater.check();
+  const cached = await updater.check();
+  clock += 24 * 60 * 60 * 1_000;
+  const nextDay = await updater.check();
+  assert.equal(first.status, "update-available");
+  assert.equal(cached.skipped, true);
+  assert.equal(nextDay.status, "update-available");
+  assert.equal(remoteChecks, 2);
 });
