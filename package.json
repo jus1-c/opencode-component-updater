@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check index.js && node --check runtime.js && node --check bootstrap/constants.js && node --check bootstrap/loader.js && node --check bootstrap/paths.js && node --check bootstrap/runtime.js && node --check bootstrap/self-update.js && node --check bootstrap/state.js && node --check src/app.js && node --check src/config.js && node --check src/detectors.js && node --check src/engine.js && node --check src/inventory.js && node --check src/json.js && node --check src/lease.js && node --check src/lock.js && node --check src/paths.js && node --check src/process.js && node --check src/state.js && node --check src/status.js && node --check src/transaction.js && node --check src/tui.js"
+    "check": "node --check index.js && node --check runtime.js && node --check bootstrap/activation.js && node --check bootstrap/constants.js && node --check bootstrap/leases.js && node --check bootstrap/loader.js && node --check bootstrap/lock.js && node --check bootstrap/paths.js && node --check bootstrap/runtime.js && node --check bootstrap/self-update.js && node --check bootstrap/state.js && node --check src/app.js && node --check src/config.js && node --check src/detectors.js && node --check src/engine.js && node --check src/inventory.js && node --check src/json.js && node --check src/lease.js && node --check src/lock.js && node --check src/paths.js && node --check src/process.js && node --check src/state.js && node --check src/status.js && node --check src/transaction.js && node --check src/tui.js"
   },
   "engines": {
     "node": ">=20"
