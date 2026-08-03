@@ -2,3 +2,5 @@ config/components.json
 node_modules/
 coverage/
 versions/
+.codegraph/
+/opencode-component-updater

@@ -13,6 +13,7 @@ function date(value) {
 
 function stateFor(cache) {
   if (cache?.lastGood) return cache.lastGood;
+  if (cache?.lastAttempt) return cache.lastAttempt;
   return cache || {};
 }
 
@@ -87,7 +88,7 @@ export function formatStatusDetail(item, { monitorError = null } = {}) {
     `Source: ${source}`,
     `Installed: ${checked.current || "unknown"}`,
     `Cached latest: ${checked.latest || "unknown"}`,
-    `Last good check: ${date(checked.checkedAt || checked.lastCheckedAt)}`,
+    `Last good check: ${date(cache.lastGood?.checkedAt)}`,
     `Last attempt: ${date(cache.lastAttempt?.checkedAt)}`,
     `Last attempt result: ${cache.lastAttempt?.summary || "none"}`,
     `Last applied: ${date(cache.lastApplied?.appliedAt)}`,

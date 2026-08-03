@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check index.js && node --check src/json.js && node --check src/paths.js && node --check src/status.js && node --check src/tui.js"
+    "check": "node --check index.js && node --check src/json.js && node --check src/paths.js && node --check src/status.js && node --check src/tui.js && node --check src/component-adapter.js && node --check src/adapter/actions.js && node --check src/adapter/inspect.js && node --check src/adapter/resolve.js && node --check src/adapter/util.js"
   },
   "engines": {
     "node": ">=20"

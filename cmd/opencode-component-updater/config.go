@@ -76,15 +76,26 @@ type sourceInfo struct {
 	Dirty   bool   `json:"dirty,omitempty"`
 }
 
+// artifactInfo pins a published release download so apply cannot silently use a
+// different build than the one the check resolved.
+type artifactInfo struct {
+	URL       string `json:"url,omitempty"`
+	Integrity string `json:"integrity,omitempty"`
+}
+
 type checkResult struct {
-	CheckedAt         int64       `json:"checkedAt"`
-	Status            string      `json:"status"`
-	Summary           string      `json:"summary"`
-	Current           string      `json:"current,omitempty"`
-	Latest            string      `json:"latest,omitempty"`
-	Source            *sourceInfo `json:"source,omitempty"`
-	SourceFingerprint string      `json:"sourceFingerprint,omitempty"`
-	ConfigFingerprint string      `json:"configFingerprint,omitempty"`
+	CheckedAt         int64         `json:"checkedAt"`
+	Status            string        `json:"status"`
+	Summary           string        `json:"summary"`
+	Current           string        `json:"current,omitempty"`
+	Latest            string        `json:"latest,omitempty"`
+	Source            *sourceInfo   `json:"source,omitempty"`
+	Artifact          *artifactInfo `json:"artifact,omitempty"`
+	// SourceCommit is provenance only. Registry releases are identified by their
+	// published version and artifact, never by this commit.
+	SourceCommit      string `json:"sourceCommit,omitempty"`
+	SourceFingerprint string `json:"sourceFingerprint,omitempty"`
+	ConfigFingerprint string `json:"configFingerprint,omitempty"`
 }
 
 type appliedRecord struct {

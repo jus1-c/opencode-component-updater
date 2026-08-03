@@ -40,14 +40,15 @@ func printStatus(value paths, out io.Writer) error {
 		item := loaded.Components[id]
 		entry := cached.Components[componentKey(id, item)]
 		good := entry.LastGood
+		displayed := displayedCheck(entry)
 		status := "not checked"
 		summary := "Not checked"
 		if !item.Enabled {
 			status = "disabled"
 			summary = "Disabled"
-		} else if good != nil {
-			status = good.Status
-			summary = good.Summary
+		} else if displayed != nil {
+			status = displayed.Status
+			summary = displayed.Summary
 		}
 		fmt.Fprintf(out, "\n%s\n  status: %s\n  summary: %s\n", id, status, summary)
 		if good != nil {
@@ -63,13 +64,24 @@ func printStatus(value paths, out io.Writer) error {
 	return nil
 }
 
+// displayedCheck prefers the last verified result but falls back to the most
+// recent attempt so a component whose first check failed is not shown as
+// "not checked".
+func displayedCheck(entry componentState) *checkResult {
+	if entry.LastGood != nil {
+		return entry.LastGood
+	}
+	return entry.LastAttempt
+}
+
 func printSelfUpdateStatus(out io.Writer, entry componentState) {
 	good := entry.LastGood
+	displayed := displayedCheck(entry)
 	status := "not checked"
 	summary := "Not checked"
-	if good != nil {
-		status = good.Status
-		summary = good.Summary
+	if displayed != nil {
+		status = displayed.Status
+		summary = displayed.Summary
 	}
 	fmt.Fprintf(out, "\n%s\n  status: %s\n  summary: %s\n", selfUpdateComponentID, status, summary)
 	if good != nil {
