@@ -63,3 +63,16 @@ test("does not run disabled components", async () => {
   assert.equal(result.results[0].status, "disabled");
   assert.equal(runs, 0);
 });
+
+test("redacts token-like custom check output before persisting summary", async () => {
+  const root = await mkdtemp(join(tmpdir(), "component-updater-engine-"));
+  const paths = resolveUpdaterPaths({ pluginRoot: root, env: {}, home: root });
+  const config = createConfig({ "plugin.example": component() });
+  const result = await runChecks({
+    paths,
+    config,
+    force: true,
+    run: async () => ({ code: 10, stdout: "token=secret-value 1 -> 2\n", stderr: "", reason: null }),
+  });
+  assert.equal(result.results[0].summary, "token=[redacted] 1 -> 2");
+});

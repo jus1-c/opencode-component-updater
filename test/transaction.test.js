@@ -77,6 +77,15 @@ test("removes failed staging output and preserves target", async () => {
   assert.deepEqual((await loadPending(paths)).updates, {});
 });
 
+test("refuses to stage disabled components", async () => {
+  const { paths, config } = await fixture();
+  config.components["plugin.example"].enabled = false;
+  await assert.rejects(
+    stageComponent({ paths, config, id: "plugin.example", run: stagedRunner() }),
+    /is disabled/,
+  );
+});
+
 test("rejects manifests that target protected or escaping paths", async () => {
   const { target, config } = await fixture();
   const stage = join(dirname(target), ".component-updater-stage-test");
@@ -117,6 +126,7 @@ test("rolls target back when a later path move fails", async () => {
   assert.equal(result.failed.length, 1);
   assert.equal(await readFile(join(target, "runtime", "version.txt"), "utf8"), "old\n");
   assert.equal(await readFile(join(target, "other", "version.txt"), "utf8"), "old-other\n");
+  assert.equal(result.failed[0].error, "simulated rename failure");
 });
 
 test("does not apply staged changes while another OpenCode instance holds a lease", async () => {

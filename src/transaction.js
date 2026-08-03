@@ -157,6 +157,7 @@ async function runHealthcheck(component, id, stage, manifest, defaults, { run, s
 export async function stageComponent({ paths, config, id, run = runCommand, signal, now = Date.now }) {
   const component = config.components[id];
   if (!component) throw new Error(`Unknown component: ${id}`);
+  if (!component.enabled) throw new Error(`Component ${id} is disabled`);
   if (component.policy.apply !== "manifest") throw new Error(`Component ${id} does not allow manifest apply`);
   if (!component.target) throw new Error(`Component ${id} has no local target`);
   if (!component.update.command.length) throw new Error(`Component ${id} has no update command`);
@@ -213,6 +214,15 @@ export async function stageComponent({ paths, config, id, run = runCommand, sign
     return update;
   } catch (error) {
     if (stage) await rm(stage, { recursive: true, force: true }).catch(() => {});
+    const state = await loadState(paths);
+    const key = componentIdentity(id, component);
+    state.components[key] = {
+      ...state.components[key],
+      status: "stage-error",
+      lastStageError: error instanceof Error ? error.message : String(error),
+      lastStageAt: now(),
+    };
+    await saveState(paths, state);
     throw error;
   } finally {
     await lock.release();
@@ -299,6 +309,10 @@ export async function applyPending({ paths, config, now = Date.now, move = renam
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         pending.updates[id] = { ...update, lastApplyError: message };
+        if (component) {
+          const key = componentIdentity(id, component);
+          state.components[key] = { ...state.components[key], status: "apply-error", lastApplyError: message };
+        }
         failed.push({ id, error: message });
       }
     }

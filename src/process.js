@@ -81,5 +81,9 @@ export async function runCommand(command, {
 }
 
 export function firstOutputLine({ stdout, stderr }) {
-  return `${stdout}\n${stderr}`.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
+  const line = `${stdout}\n${stderr}`.split(/\r?\n/).map((value) => value.trim()).find(Boolean) || "";
+  return line
+    .replace(/\bBearer\s+[^\s]+/gi, "Bearer [redacted]")
+    .replace(/\b(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s]+/gi, "$1=[redacted]")
+    .replace(/\/\/[^\s/@:]+(?::[^\s/@]+)?@/g, "//[redacted]@");
 }
