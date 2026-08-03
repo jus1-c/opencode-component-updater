@@ -16,5 +16,10 @@ export function resolveUpdaterPaths({ pluginRoot, env = process.env, home = home
     exampleConfigPath: resolve(pluginRoot, "config", "components.example.json"),
     opencodeConfigRoot: resolve(opencodeConfigRoot),
     stateRoot: resolve(stateRoot),
+    statePath: resolve(stateRoot, "state.json"),
+    checkLockPath: resolve(stateRoot, "locks", "check.lock"),
+    instanceRoot: resolve(stateRoot, "instances"),
+    pendingPath: resolve(stateRoot, "pending.json"),
+    backupRoot: resolve(stateRoot, "backups"),
   };
 }
