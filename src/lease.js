@@ -8,6 +8,7 @@ function leasePath(paths, id) {
 }
 
 export async function listLiveInstances(paths, { now = Date.now, staleMs } = {}) {
+  const prune = arguments[1]?.prune !== false;
   let files = [];
   try {
     files = await readdir(paths.instanceRoot);
@@ -22,15 +23,15 @@ export async function listLiveInstances(paths, { now = Date.now, staleMs } = {})
     try {
       instance = await readJson(path, null);
     } catch {
-      await rm(path, { force: true }).catch(() => {});
+      if (prune) await rm(path, { force: true }).catch(() => {});
       continue;
     }
     if (!instance?.id || !Number.isSafeInteger(instance.heartbeatAt)) {
-      await rm(path, { force: true }).catch(() => {});
+      if (prune) await rm(path, { force: true }).catch(() => {});
       continue;
     }
     if (now() - instance.heartbeatAt > staleMs) {
-      await rm(path, { force: true }).catch(() => {});
+      if (prune) await rm(path, { force: true }).catch(() => {});
       continue;
     }
     instances.push(instance);
@@ -50,10 +51,17 @@ export async function createLease(paths, {
   const path = leasePath(paths, id);
   const startedAt = now();
   let disposed = false;
+  let refreshInFlight;
 
   async function refresh() {
     if (disposed) return;
-    await writeJsonAtomic(path, { id, pid, worktree, startedAt, heartbeatAt: now() });
+    const write = writeJsonAtomic(path, { id, pid, worktree, startedAt, heartbeatAt: now() });
+    refreshInFlight = write;
+    try {
+      await write;
+    } finally {
+      if (refreshInFlight === write) refreshInFlight = undefined;
+    }
   }
 
   await refresh();
@@ -70,6 +78,7 @@ export async function createLease(paths, {
       if (disposed) return;
       disposed = true;
       clearIntervalImpl(timer);
+      await refreshInFlight?.catch(() => {});
       await rm(path, { force: true });
     },
   };

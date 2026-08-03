@@ -70,3 +70,16 @@ test("manual check joins the startup check and updates cached status", async () 
   const dispose = await app.dispose();
   assert.equal(dispose.skipped, false);
 });
+
+test("failed startup does not attempt a pending apply on dispose", async () => {
+  const root = await mkdtemp(join(tmpdir(), "component-updater-app-"));
+  const paths = resolveUpdaterPaths({ pluginRoot: join(root, "plugin"), env: {}, home: root });
+  const app = createUpdaterApp({
+    paths,
+    inventory: async () => { throw new Error("inventory unavailable"); },
+    setIntervalImpl: () => ({ unref() {} }),
+    clearIntervalImpl() {},
+  });
+  await assert.rejects(app.start(), /inventory unavailable/);
+  assert.deepEqual(await app.dispose(), { skipped: true, reason: "not started" });
+});

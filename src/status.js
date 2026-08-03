@@ -19,7 +19,7 @@ export async function readStatus({ paths, config, now = Date.now }) {
   const [state, pending, instances] = await Promise.all([
     loadState(paths),
     loadPending(paths),
-    listLiveInstances(paths, { now, staleMs: config.defaults.staleInstanceMs }),
+    listLiveInstances(paths, { now, staleMs: config.defaults.staleInstanceMs, prune: false }),
   ]);
   const timestamp = now();
   const checkIntervalMs = config.defaults.checkIntervalHours * 60 * 60 * 1_000;

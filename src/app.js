@@ -151,6 +151,7 @@ export function createUpdaterApp({
     controller.abort();
     await Promise.allSettled([...jobs]);
     await lease?.dispose();
+    if (!config) return { skipped: true, reason: "not started" };
     const applied = await applyPending({ paths, config, now });
     emit("disposed", { applied });
     return applied;
