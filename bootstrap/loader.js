@@ -1,10 +1,11 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { activateCandidate, rejectRuntime } from "./activation.js";
+import { BOOTSTRAP_API } from "./constants.js";
 import { resolveBootstrapPaths } from "./paths.js";
+import { verifyRuntime } from "./runtime.js";
 import { BASELINE_RUNTIME, loadSelfState } from "./state.js";
-
-export const BOOTSTRAP_API = 1;
 
 function runtimePath(paths, runtime) {
   return runtime === BASELINE_RUNTIME
@@ -13,6 +14,7 @@ function runtimePath(paths, runtime) {
 }
 
 async function loadRuntime(paths, runtime) {
+  if (runtime !== BASELINE_RUNTIME) await verifyRuntime(paths, runtime);
   const path = runtimePath(paths, runtime);
   await access(path);
   const module = await import(pathToFileURL(path).href);
@@ -27,6 +29,7 @@ async function loadRuntime(paths, runtime) {
 }
 
 export async function loadRuntimePlugin({ pluginRoot, paths = resolveBootstrapPaths({ pluginRoot }) }) {
+  await activateCandidate({ pluginRoot, paths });
   const state = await loadSelfState(paths);
   const runtimes = [...new Set([state.current, state.previous, BASELINE_RUNTIME].filter(Boolean))];
   let failure;
@@ -35,6 +38,7 @@ export async function loadRuntimePlugin({ pluginRoot, paths = resolveBootstrapPa
       return await loadRuntime(paths, runtime);
     } catch (error) {
       failure = error;
+      await rejectRuntime({ pluginRoot, paths, runtime, error });
     }
   }
   throw failure || new Error("No compatible updater runtime is available");

@@ -9,6 +9,7 @@ export function resolveBootstrapPaths({ pluginRoot, env = process.env, home = ho
     stateRoot: resolve(stateRoot),
     selfStatePath: resolve(stateRoot, "self-update.json"),
     selfLockPath: resolve(stateRoot, "locks", "self-update.lock"),
+    instanceRoot: resolve(stateRoot, "instances"),
     versionsRoot: resolve(pluginRoot, "versions"),
   };
 }

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRuntimePlugin } from "../bootstrap/loader.js";
 import { resolveBootstrapPaths } from "../bootstrap/paths.js";
+import { createRuntimeManifest, RUNTIME_MANIFEST_FILE } from "../bootstrap/runtime.js";
 import { BASELINE_RUNTIME, normalizeSelfState } from "../bootstrap/state.js";
 
 async function writeRuntime(root, name) {
@@ -33,7 +34,12 @@ test("loads the immutable baseline runtime by default", async () => {
 test("loads the selected versioned runtime", async () => {
   const { paths, pluginRoot } = await fixture();
   const commit = "a".repeat(40);
-  await writeRuntime(join(paths.versionsRoot, commit), "candidate");
+  const runtime = join(paths.versionsRoot, commit);
+  await writeRuntime(runtime, "candidate");
+  await writeFile(join(runtime, "package.json"), JSON.stringify({ type: "module" }));
+  await mkdir(join(runtime, "src"));
+  await writeFile(join(runtime, "src", "placeholder.js"), "export {};\n");
+  await writeFile(join(runtime, RUNTIME_MANIFEST_FILE), JSON.stringify(await createRuntimeManifest(runtime, commit)));
   await mkdir(join(paths.stateRoot), { recursive: true });
   await writeFile(paths.selfStatePath, JSON.stringify({
     schemaVersion: 1,
@@ -76,5 +82,6 @@ test("normalizes untrusted self-update state", () => {
     previous: "f".repeat(40),
     candidate: null,
     lastFailure: null,
+    lastCheck: null,
   });
 });
