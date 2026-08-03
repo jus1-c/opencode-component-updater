@@ -4,7 +4,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { discoverInventory } from "../src/inventory.js";
+import { bootstrapConfig, discoverInventory } from "../src/inventory.js";
+import { createConfig, loadConfig, saveConfig } from "../src/config.js";
 import { resolveUpdaterPaths } from "../src/paths.js";
 
 async function fixture() {
@@ -36,4 +37,24 @@ test("discovers configured and orphaned component owners without persisting conf
   assert.equal(inventory.config.components["plugin.goal"].target, join(config, "plugins", "goal"));
   assert.equal(inventory.config.components["mcp.remote"].target, null);
   assert.equal(inventory.config.components["mcp.remote"].policy.apply, "none");
+});
+
+test("backfills missing inventory entries without replacing existing custom commands", async () => {
+  const { root, config } = await fixture();
+  const paths = resolveUpdaterPaths({ pluginRoot: join(root, "plugin"), env: { OPENCODE_CONFIG_DIR: config }, home: root });
+  await saveConfig(paths, createConfig({
+    "mcp.example": {
+      kind: "mcp",
+      name: "example",
+      target: join(config, "mcps", "example"),
+      enabled: true,
+      check: { command: ["custom-check"] },
+    },
+  }));
+  const result = await bootstrapConfig(paths, { backfill: true });
+  const updated = await loadConfig(paths);
+  assert.equal(result.created, false);
+  assert.ok(result.added.includes("plugin.orphan"));
+  assert.deepEqual(updated.components["mcp.example"].check.command, ["custom-check"]);
+  assert.equal(updated.components["plugin.orphan"].enabled, false);
 });

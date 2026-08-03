@@ -80,10 +80,14 @@ export async function runCommand(command, {
   });
 }
 
-export function firstOutputLine({ stdout, stderr }) {
-  const line = `${stdout}\n${stderr}`.split(/\r?\n/).map((value) => value.trim()).find(Boolean) || "";
-  return line
+export function sanitizeSummary(value) {
+  return String(value || "")
     .replace(/\bBearer\s+[^\s]+/gi, "Bearer [redacted]")
     .replace(/\b(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s]+/gi, "$1=[redacted]")
     .replace(/\/\/[^\s/@:]+(?::[^\s/@]+)?@/g, "//[redacted]@");
+}
+
+export function firstOutputLine({ stdout, stderr }) {
+  const line = `${stdout}\n${stderr}`.split(/\r?\n/).map((value) => value.trim()).find(Boolean) || "";
+  return sanitizeSummary(line);
 }

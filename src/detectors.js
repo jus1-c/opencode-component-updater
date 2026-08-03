@@ -57,6 +57,16 @@ function exactVersion(value) {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value || "");
 }
 
+function parseNpmSpecifier(spec) {
+  if (typeof spec !== "string" || !spec || spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("file:")) return null;
+  const scoped = spec.match(/^(@[^/]+\/[^@]+)@(.+)$/);
+  if (scoped) return { name: scoped[1], version: scoped[2] };
+  const unscoped = spec.match(/^([^@/][^@]*)@(.+)$/);
+  if (unscoped) return { name: unscoped[1], version: unscoped[2] };
+  if (/^@[^/]+\/[^@]+$/.test(spec) || /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(spec)) return { name: spec, version: null };
+  return null;
+}
+
 function compareVersions(left, right) {
   const parse = (value) => value.replace(/^v/, "").split("-")[0].split(".").map(Number);
   const a = parse(left);
@@ -69,6 +79,31 @@ function compareVersions(left, right) {
 
 function sourceResult(primary, layers, evidence, extra = {}) {
   return { primary, layers, evidence, confidence: primary === "local" ? "low" : "high", ...extra };
+}
+
+function addLayer(layers, layer) {
+  if (!layers.some((existing) => existing.type === layer.type && existing.name === layer.name && existing.version === layer.version && existing.url === layer.url)) {
+    layers.push(layer);
+  }
+}
+
+async function readPackage(path) {
+  try {
+    return JSON.parse(await readText(path) || "null");
+  } catch {
+    return null;
+  }
+}
+
+async function packageAtEntrypoint(entrypoint) {
+  const entrypointStat = await stat(entrypoint).catch(() => null);
+  if (!entrypointStat) return null;
+  return readPackage(join(entrypointStat.isDirectory() ? entrypoint : new URL(".", `file://${entrypoint}`).pathname, "package.json"));
+}
+
+function npmLayer(pkg, { nested = false } = {}) {
+  if (!pkg?.name || !exactVersion(pkg.version) || pkg.private || (!nested && !pkg.repository)) return null;
+  return { type: "npm", name: pkg.name, version: pkg.version, repository: parseRepository(pkg.repository) };
 }
 
 async function gitWorktree(target, run) {
@@ -94,18 +129,19 @@ export async function detectComponent(component, { record, run = runCommand } = 
   }
   if (!component.target) {
     const npmHint = hints.find((hint) => hint.type === "npm");
-    return sourceResult(npmHint ? "npm" : "system", [npmHint || { type: "system" }], ["OpenCode config"]);
+    const parsed = parseNpmSpecifier(npmHint?.spec);
+    return sourceResult(parsed ? "npm" : "system", [parsed ? { type: "npm", ...parsed } : { type: "system" }], ["OpenCode config"]);
   }
 
   const layers = [];
   const evidence = [];
   const requirements = parseRequirements(await readText(join(component.target, "requirements.in")));
   if (requirements.git.length) {
-    layers.push({ type: "git", ...requirements.git[0], current: requirements.git[0].ref });
+    addLayer(layers, { type: "git", ...requirements.git[0], current: requirements.git[0].ref });
     evidence.push("requirements.in");
   }
   if (requirements.pypi.length) {
-    layers.push({ type: "pypi", ...requirements.pypi[0] });
+    addLayer(layers, { type: "pypi", ...requirements.pypi[0] });
     evidence.push("requirements.in");
   }
 
@@ -115,14 +151,27 @@ export async function detectComponent(component, { record, run = runCommand } = 
     evidence.push(".git");
   }
 
-  try {
-    const pkg = JSON.parse(await readText(join(component.target, "package.json")) || "null");
-    if (pkg?.name && pkg?.version) {
-      layers.push({ type: "npm", name: pkg.name, version: pkg.version, repository: parseRepository(pkg.repository) });
-      evidence.push("package.json");
+  const pkg = await readPackage(join(component.target, "package.json"));
+  if (pkg) {
+    const rootNpm = npmLayer(pkg);
+    if (rootNpm) addLayer(layers, rootNpm);
+    const exactDependencies = Object.entries(pkg.dependencies || {}).filter(([, version]) => exactVersion(version));
+    if (!rootNpm && exactDependencies.length === 1) {
+      const [name, version] = exactDependencies[0];
+      addLayer(layers, { type: "npm", name, version, repository: null });
     }
-  } catch {
+    evidence.push("package.json");
+  } else if (await exists(join(component.target, "package.json"))) {
     evidence.push("invalid package.json");
+  }
+  for (const entrypoint of record?.entrypoints || []) {
+    if (entrypoint === component.target) continue;
+    const nested = await packageAtEntrypoint(entrypoint);
+    const nestedNpm = npmLayer(nested, { nested: true });
+    if (nestedNpm) {
+      addLayer(layers, nestedNpm);
+      evidence.push("plugin entrypoint package.json");
+    }
   }
   if (await exists(join(component.target, ".venv"))) layers.push({ type: "python-venv", path: ".venv" });
   if (await exists(join(component.target, "node_modules"))) layers.push({ type: "node-runtime", path: "node_modules" });
@@ -160,7 +209,7 @@ export async function checkDetectedSource(detection, { fetchImpl = globalThis.fe
         : { status: "update-available", current: source.current, latest, summary: `${source.current.slice(0, 7)} -> ${latest.slice(0, 7)}` };
     }
     if (source.type === "npm") {
-      if (!exactVersion(source.version)) return { status: "manual-only", summary: "npm version is not exact semver" };
+      if (!source.name || !exactVersion(source.version)) return { status: "manual-only", summary: "npm version is not exact semver" };
       const metadata = await fetchJson(`https://registry.npmjs.org/${encodeURIComponent(source.name)}`, fetchImpl);
       const latest = metadata?.["dist-tags"]?.latest;
       if (!exactVersion(latest)) throw new Error("npm metadata has no exact latest version");

@@ -34,3 +34,19 @@ test("refuses automatic checks for dirty Git worktrees", async () => {
   assert.equal(detection.primary, "git");
   assert.equal(detection.dirty, true);
 });
+
+test("detects an exact nested npm plugin package from its configured entrypoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "component-updater-detector-"));
+  const entrypoint = join(root, "node_modules", "@vendor", "plugin");
+  await mkdir(entrypoint, { recursive: true });
+  await writeFile(join(root, "package.json"), JSON.stringify({ dependencies: { "@vendor/plugin": "1.2.3" } }));
+  await writeFile(join(entrypoint, "package.json"), JSON.stringify({ name: "@vendor/plugin", version: "1.2.3" }));
+  const detection = await detectComponent({ target: root }, { record: { hints: [], entrypoints: [entrypoint] } });
+  assert.equal(detection.primary, "npm");
+  assert.deepEqual(detection.layers.find((layer) => layer.type === "npm"), {
+    type: "npm",
+    name: "@vendor/plugin",
+    version: "1.2.3",
+    repository: null,
+  });
+});

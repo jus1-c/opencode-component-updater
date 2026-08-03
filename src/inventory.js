@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createConfig } from "./config.js";
+import { createConfig, loadConfig, saveConfig } from "./config.js";
 
 async function exists(path) {
   try {
@@ -60,6 +60,7 @@ function addRecord(records, record) {
   }
   previous.active ||= record.active;
   previous.hints.push(...record.hints);
+  previous.entrypoints.push(...record.entrypoints.filter((path) => !previous.entrypoints.includes(path)));
 }
 
 function ownerTarget(target, root) {
@@ -108,6 +109,7 @@ export async function discoverInventory(paths) {
       ...component(id, "mcp", name, target, target ? "manual" : "none"),
       active: true,
       hints: [{ type: entry?.type === "remote" ? "remote" : target ? "local" : "system" }],
+      entrypoints: target ? [target] : [],
     });
   }
 
@@ -121,6 +123,7 @@ export async function discoverInventory(paths) {
       ...component(id, "plugin", name, owner, owner ? "manual" : "none"),
       active: true,
       hints: [{ type: owner ? "local" : "npm", spec: typeof spec === "string" ? spec : "" }],
+      entrypoints: target ? [target] : [],
     });
   }
 
@@ -130,6 +133,7 @@ export async function discoverInventory(paths) {
       ...component(`mcp.${name}`, "mcp", name, target),
       active: false,
       hints: [{ type: "local" }],
+      entrypoints: [],
     });
   }
   for (const target of await childDirectories(pluginsRoot)) {
@@ -138,6 +142,7 @@ export async function discoverInventory(paths) {
       ...component(`plugin.${name}`, "plugin", name, target),
       active: false,
       hints: [{ type: "local" }],
+      entrypoints: [],
     });
   }
 
@@ -148,10 +153,20 @@ export async function discoverInventory(paths) {
   };
 }
 
-export async function bootstrapConfig(paths, { inventory = discoverInventory } = {}) {
-  if (await exists(paths.configPath)) return false;
+export async function bootstrapConfig(paths, { inventory = discoverInventory, backfill = false } = {}) {
+  const existing = await loadConfig(paths);
+  if (existing) {
+    if (!backfill) return { created: false, added: [] };
+    const discovered = await inventory(paths);
+    const additions = Object.fromEntries(
+      Object.entries(discovered.config.components).filter(([id]) => !(id in existing.components)),
+    );
+    if (Object.keys(additions).length) {
+      await saveConfig(paths, { ...existing, components: { ...existing.components, ...additions } });
+    }
+    return { created: false, added: Object.keys(additions) };
+  }
   const discovered = await inventory(paths);
-  const { saveConfig } = await import("./config.js");
   await saveConfig(paths, discovered.config);
-  return true;
+  return { created: true, added: Object.keys(discovered.config.components) };
 }

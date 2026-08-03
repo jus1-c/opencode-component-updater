@@ -9,7 +9,7 @@ export function statusForComponent({ id, component, state, pending, now, checkIn
   if (!component.enabled) return { id, key, component, status: "disabled", summary: "Disabled", cached, update };
   if (update) return { id, key, component, status: "staged-pending-restart", summary: update.summary || "Restart required", cached, update };
   if (!cached.status) return { id, key, component, status: "stale", summary: "Not checked", cached, update };
-  if (cached.lastCheckedAt && now - cached.lastCheckedAt >= checkIntervalMs) {
+  if (Number.isSafeInteger(cached.lastCheckedAt) && now - cached.lastCheckedAt >= checkIntervalMs) {
     return { id, key, component, status: "stale", summary: cached.summary || "Check is stale", cached, update };
   }
   return { id, key, component, status: cached.status, summary: cached.summary || cached.status, cached, update };
@@ -40,8 +40,8 @@ export function formatStatusDetail(item, { instanceCount, checkIntervalHours = 2
   const evidence = source?.evidence?.join(", ") || "none";
   const current = item.cached.current || "unknown";
   const latest = item.cached.latest || "unknown";
-  const lastChecked = item.cached.lastCheckedAt ? new Date(item.cached.lastCheckedAt).toISOString() : "never";
-  const nextCheck = item.cached.lastCheckedAt
+  const lastChecked = Number.isSafeInteger(item.cached.lastCheckedAt) ? new Date(item.cached.lastCheckedAt).toISOString() : "never";
+  const nextCheck = Number.isSafeInteger(item.cached.lastCheckedAt)
     ? new Date(item.cached.lastCheckedAt + checkIntervalHours * 60 * 60 * 1_000).toISOString()
     : "now";
   return [
@@ -49,6 +49,9 @@ export function formatStatusDetail(item, { instanceCount, checkIntervalHours = 2
     `Scope: ${item.component.scope}`,
     `Kind: ${item.component.kind}`,
     `Target: ${item.component.target || "external/system-managed"}`,
+    `Allowed paths: ${item.component.policy.allowedPaths.join(", ") || "none"}`,
+    `Protected paths: ${item.component.policy.protectedPaths.join(", ") || "none"}`,
+    `Update script: ${item.component.update.command.length ? "configured" : "not configured"}`,
     "",
     `Status: ${item.status}`,
     `Summary: ${item.summary}`,
