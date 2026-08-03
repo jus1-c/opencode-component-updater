@@ -18,6 +18,7 @@ export function resolveUpdaterPaths({ pluginRoot, env = process.env, home = home
     stateRoot: resolve(stateRoot),
     statePath: resolve(stateRoot, "state.json"),
     checkLockPath: resolve(stateRoot, "locks", "check.lock"),
+    applyLockPath: resolve(stateRoot, "locks", "apply.lock"),
     instanceRoot: resolve(stateRoot, "instances"),
     pendingPath: resolve(stateRoot, "pending.json"),
     backupRoot: resolve(stateRoot, "backups"),

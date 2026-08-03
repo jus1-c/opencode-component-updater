@@ -30,7 +30,11 @@ export async function acquireLock(path, { staleMs, now = Date.now, pid = process
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       const holder = await readLock(path);
-      if (!holder || !Number.isSafeInteger(staleMs) || staleMs <= 0 || startedAt - holder.startedAt <= staleMs) {
+      if (!holder || !Number.isSafeInteger(holder.startedAt)) {
+        await rm(path, { force: true });
+        continue;
+      }
+      if (!Number.isSafeInteger(staleMs) || staleMs <= 0 || startedAt - holder.startedAt <= staleMs) {
         return null;
       }
       await rm(path, { force: true });
