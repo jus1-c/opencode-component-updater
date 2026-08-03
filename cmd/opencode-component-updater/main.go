@@ -49,6 +49,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "upgrade":
+		bestEffort, err := parseUpgradeArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 2
+		}
+		if err := runUpgrade(ctx, paths, bestEffort, stderr); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+			}
+			var partial *partialUpgradeError
+			if errors.As(err, &partial) {
+				return 4
+			}
+			return 1
+		}
+		return 0
 	case "status":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "error: status takes no arguments")
@@ -89,9 +106,23 @@ func parseCheckArgs(args []string) (bool, error) {
 	return quiet, nil
 }
 
+func parseUpgradeArgs(args []string) (bool, error) {
+	bestEffort := false
+	for _, arg := range args {
+		switch arg {
+		case "--best-effort":
+			bestEffort = true
+		default:
+			return false, fmt.Errorf("unknown upgrade option %q", arg)
+		}
+	}
+	return bestEffort, nil
+}
+
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, strings.TrimSpace(`Usage:
   opencode-component-updater check [--quiet]
+  opencode-component-updater upgrade [--best-effort]
   opencode-component-updater status
   opencode-component-updater doctor
   opencode-component-updater version`))

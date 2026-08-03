@@ -22,7 +22,7 @@ func printStatus(value paths, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	processes, err := listOpenCodeProcesses()
+	processes, err := findOpenCodeProcesses()
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func printDoctor(value paths, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	processes, processErr := listOpenCodeProcesses()
+	processes, processErr := findOpenCodeProcesses()
 	fmt.Fprintf(out, "config: %s\n", doctorState(exists, value.ConfigPath))
 	fmt.Fprintf(out, "state: %s\n", fileState(value.StatePath))
 	fmt.Fprintf(out, "journal: %s\n", fileState(value.JournalPath))

@@ -163,6 +163,11 @@ type checkSummary struct {
 }
 
 func runCheck(ctx context.Context, value paths, quiet bool, stderr io.Writer) error {
+	lock, err := acquireOperationLock(value, "check")
+	if err != nil {
+		return err
+	}
+	defer lock.release()
 	operation := func(worker context.Context, report reporter) error {
 		_, err := checkAll(worker, value, report)
 		return err

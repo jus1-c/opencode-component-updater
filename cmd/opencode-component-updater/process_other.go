@@ -12,6 +12,10 @@ func listOpenCodeProcesses() ([]openCodeProcess, error) {
 	return []openCodeProcess{}, nil
 }
 
+func processExists(pid int) bool {
+	return false
+}
+
 func isOpenCodeProcess(executable, comm string, executableAvailable bool) bool {
 	return false
 }

@@ -269,6 +269,19 @@ func ensureConfig(value paths) (config, error) {
 		return config{}, err
 	}
 	changed := false
+	if exists {
+		contents, err := os.ReadFile(value.ConfigPath)
+		if err != nil {
+			return config{}, err
+		}
+		var raw struct {
+			SchemaVersion int `json:"schemaVersion"`
+		}
+		if err := json.Unmarshal(contents, &raw); err != nil {
+			return config{}, fmt.Errorf("parse config: %w", err)
+		}
+		changed = raw.SchemaVersion != configSchemaVersion
+	}
 	if !exists {
 		for _, legacy := range []string{
 			filepath.Join(value.OpenCodeConfigRoot, "plugins", "component-updater", "config", "components.json"),

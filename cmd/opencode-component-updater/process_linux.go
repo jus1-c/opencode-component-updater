@@ -37,6 +37,11 @@ func listOpenCodeProcesses() ([]openCodeProcess, error) {
 	return processes, nil
 }
 
+func processExists(pid int) bool {
+	_, err := os.Stat(filepath.Join("/proc", strconv.Itoa(pid)))
+	return err == nil
+}
+
 func processIsZombie(pid int) bool {
 	contents, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
 	return err == nil && strings.Contains(string(contents), "\nState:\tZ")
