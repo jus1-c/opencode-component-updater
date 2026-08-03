@@ -12,11 +12,22 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "component-updater-inventory-"));
   const config = join(root, "opencode");
   await mkdir(join(config, "mcps", "example", ".venv", "bin"), { recursive: true });
+  await mkdir(join(config, "mcps", "cheatengine", ".venv", "bin"), { recursive: true });
+  await mkdir(join(config, "mcps", "cheatengine", "source", "MCP_Server"), { recursive: true });
+  await mkdir(join(config, "mcps", "agentmemory", "bin"), { recursive: true });
   await mkdir(join(config, "plugins", "goal", "node_modules", "@vendor", "goal"), { recursive: true });
   await mkdir(join(config, "plugins", "orphan"), { recursive: true });
   await writeFile(join(config, "opencode.json"), JSON.stringify({
     mcp: {
       example: { type: "local", command: [join(config, "mcps", "example", ".venv", "bin", "example")] },
+      cheatengine: {
+        type: "local",
+        command: [
+          join(config, "mcps", "cheatengine", ".venv", "bin", "python"),
+          join(config, "mcps", "cheatengine", "source", "MCP_Server", "mcp_cheatengine.py"),
+        ],
+      },
+      agentmemory: { type: "local", command: ["node", join(config, "mcps", "agentmemory", "bin", "agentmemory-wrapper.js")] },
       remote: { type: "remote", url: "https://example.invalid/mcp" },
       system: { type: "local", command: ["codegraph", "serve", "--mcp"] },
     },
@@ -32,11 +43,18 @@ test("discovers configured and orphaned component owners without persisting conf
   const inventory = await discoverInventory(paths);
   const ids = inventory.records.map((record) => record.id).sort();
 
-  assert.deepEqual(ids, ["mcp.example", "mcp.remote", "mcp.system", "plugin.goal", "plugin.orphan"]);
+  assert.deepEqual(ids, ["mcp.agentmemory", "mcp.cheatengine", "mcp.example", "mcp.remote", "mcp.system", "plugin.goal", "plugin.orphan"]);
   assert.equal(inventory.config.components["mcp.example"].target, join(config, "mcps", "example"));
   assert.equal(inventory.config.components["plugin.goal"].target, join(config, "plugins", "goal"));
   assert.equal(inventory.config.components["mcp.remote"].target, null);
   assert.equal(inventory.config.components["mcp.remote"].policy.apply, "none");
+  assert.deepEqual(inventory.records.find((record) => record.id === "mcp.cheatengine").entrypoints, [
+    join(config, "mcps", "cheatengine", ".venv", "bin", "python"),
+    join(config, "mcps", "cheatengine", "source", "MCP_Server", "mcp_cheatengine.py"),
+  ]);
+  assert.deepEqual(inventory.records.find((record) => record.id === "mcp.agentmemory").entrypoints, [
+    join(config, "mcps", "agentmemory", "bin", "agentmemory-wrapper.js"),
+  ]);
 });
 
 test("backfills missing inventory entries without replacing existing custom commands", async () => {
@@ -57,4 +75,24 @@ test("backfills missing inventory entries without replacing existing custom comm
   assert.ok(result.added.includes("plugin.orphan"));
   assert.deepEqual(updated.components["mcp.example"].check.command, ["custom-check"]);
   assert.equal(updated.components["plugin.orphan"].enabled, false);
+});
+
+test("backfills records from a lightweight inventory result", async () => {
+  const { root, config } = await fixture();
+  const paths = resolveUpdaterPaths({ pluginRoot: join(root, "plugin"), env: { OPENCODE_CONFIG_DIR: config }, home: root });
+  await saveConfig(paths, createConfig({}));
+  const result = await bootstrapConfig(paths, {
+    backfill: true,
+    inventory: async () => ({ records: [{
+      id: "plugin.new",
+      component: {
+        kind: "plugin",
+        name: "new",
+        target: join(config, "plugins", "new"),
+      },
+    }] }),
+  });
+  const updated = await loadConfig(paths);
+  assert.deepEqual(result.added, ["plugin.new"]);
+  assert.equal(updated.components["plugin.new"].enabled, false);
 });

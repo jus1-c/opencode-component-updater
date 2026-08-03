@@ -44,10 +44,14 @@ export function createUpdaterApp({
     return job;
   }
 
+  function scheduleCheck() {
+    void check({ force: false }).catch((error) => emit("check-error", { error: message(error) }));
+  }
+
   async function ensureReady() {
     if (started) return started;
     const startup = (async () => {
-      await bootstrapConfig(paths, { inventory });
+      await bootstrapConfig(paths, { inventory, backfill: true });
       config = await loadConfig(paths);
       if (!config) throw new Error("Component updater config could not be created");
       const discovered = await inventory(paths);
@@ -60,9 +64,7 @@ export function createUpdaterApp({
         clearIntervalImpl,
       });
       const interval = Math.min(config.defaults.checkIntervalHours * 60 * 60 * 1_000, 60 * 60 * 1_000);
-      timer = setIntervalImpl(() => {
-        void check({ force: false });
-      }, interval);
+      timer = setIntervalImpl(scheduleCheck, interval);
       timer.unref?.();
       emit("started", { config, records });
     })();
@@ -93,6 +95,7 @@ export function createUpdaterApp({
   }
 
   async function stageAvailable() {
+    await ensureReady();
     const snapshot = await status();
     const updates = snapshot.components.filter((item) => item.status === "update-available" && config.components[item.id].update.command.length);
     const results = [];
@@ -135,13 +138,14 @@ export function createUpdaterApp({
   }
 
   async function status() {
-    await ensureReady();
-    return readStatus({ paths, config, now });
+    const readOnlyConfig = config || await loadConfig(paths) || (await inventory(paths)).config;
+    if (!readOnlyConfig) throw new Error("Component updater config could not be read");
+    return readStatus({ paths, config: readOnlyConfig, now });
   }
 
   async function start() {
     await ensureReady();
-    void check({ force: false }).catch((error) => emit("check-error", { error: message(error) }));
+    scheduleCheck();
   }
 
   async function dispose() {

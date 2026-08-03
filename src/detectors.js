@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { firstOutputLine, runCommand } from "./process.js";
 
 async function exists(path) {
@@ -19,6 +19,15 @@ async function readText(path) {
   }
 }
 
+function within(parent, child) {
+  const path = relative(parent, child);
+  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
+}
+
+function addEvidence(evidence, value) {
+  if (!evidence.includes(value)) evidence.push(value);
+}
+
 function sanitizeUrl(value) {
   try {
     const url = new URL(value.replace(/^git\+/, ""));
@@ -33,9 +42,16 @@ function sanitizeUrl(value) {
 function parseRequirements(text) {
   const git = [];
   const pypi = [];
+  const includes = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.replace(/\s+#.*$/, "").trim();
-    if (!line || line.startsWith("#") || line.startsWith("-")) continue;
+    if (!line || line.startsWith("#")) continue;
+    const include = line.match(/^(?:-r|--requirement)(?:\s+|=)(.+)$/);
+    if (include) {
+      includes.push(include[1].trim().split(/\s+/)[0]);
+      continue;
+    }
+    if (line.startsWith("-")) continue;
     const directGit = line.match(/^([\w.-]+)(?:\[[^\]]+\])?\s*@\s*git\+(.+?)@([^\s#]+)(?:#.*)?$/);
     if (directGit) {
       git.push({ name: directGit[1], url: sanitizeUrl(directGit[2]), ref: directGit[3] });
@@ -44,7 +60,27 @@ function parseRequirements(text) {
     const exact = line.match(/^([\w.-]+)(?:\[[^\]]+\])?==([^\s;#]+)$/);
     if (exact) pypi.push({ name: exact[1], version: exact[2] });
   }
-  return { git, pypi };
+  return { git, pypi, includes };
+}
+
+async function readRequirements(path, target, seen) {
+  const requirementsPath = resolve(path);
+  if (!within(target, requirementsPath) || seen.has(requirementsPath)) {
+    return { git: [], pypi: [], files: [] };
+  }
+  const entry = await stat(requirementsPath).catch(() => null);
+  if (!entry?.isFile()) return { git: [], pypi: [], files: [] };
+
+  seen.add(requirementsPath);
+  const requirements = parseRequirements(await readText(requirementsPath));
+  const result = { git: [...requirements.git], pypi: [...requirements.pypi], files: [requirementsPath] };
+  for (const include of requirements.includes) {
+    const nested = await readRequirements(resolve(dirname(requirementsPath), include), target, seen);
+    result.git.push(...nested.git);
+    result.pypi.push(...nested.pypi);
+    result.files.push(...nested.files);
+  }
+  return result;
 }
 
 function parseRepository(repository) {
@@ -98,7 +134,7 @@ async function readPackage(path) {
 async function packageAtEntrypoint(entrypoint) {
   const entrypointStat = await stat(entrypoint).catch(() => null);
   if (!entrypointStat) return null;
-  return readPackage(join(entrypointStat.isDirectory() ? entrypoint : new URL(".", `file://${entrypoint}`).pathname, "package.json"));
+  return readPackage(join(entrypointStat.isDirectory() ? entrypoint : dirname(entrypoint), "package.json"));
 }
 
 function npmLayer(pkg, { nested = false } = {}) {
@@ -122,6 +158,43 @@ async function gitWorktree(target, run) {
   };
 }
 
+async function metadataRoots(target, entrypoints = []) {
+  const candidates = [target, join(target, "source"), join(target, "runtime")];
+  for (const entrypoint of entrypoints) {
+    const entry = await stat(entrypoint).catch(() => null);
+    let current = entry?.isDirectory() ? entrypoint : dirname(entrypoint);
+    while (within(target, current)) {
+      candidates.push(current);
+      if (current === target) break;
+      current = dirname(current);
+    }
+  }
+  const roots = [];
+  for (const root of candidates) {
+    if (!roots.includes(root) && (await stat(root).catch(() => null))?.isDirectory()) roots.push(root);
+  }
+  return roots;
+}
+
+function evidencePath(target, path) {
+  return relative(target, path) || ".";
+}
+
+function metadataEvidence(target, root, filename) {
+  const path = evidencePath(target, root);
+  return path === "." ? filename : `${path}/${filename}`;
+}
+
+async function packageLockLayers(root) {
+  const lock = await readPackage(join(root, "package-lock.json"));
+  const dependencies = lock?.packages?.[""]?.dependencies;
+  if (!dependencies || typeof dependencies !== "object") return [];
+  return Object.keys(dependencies).flatMap((name) => {
+    const version = lock.packages[`node_modules/${name}`]?.version;
+    return exactVersion(version) ? [{ type: "npm", name, version, repository: null }] : [];
+  });
+}
+
 export async function detectComponent(component, { record, run = runCommand } = {}) {
   const hints = record?.hints || [];
   if (hints.some((hint) => hint.type === "remote")) {
@@ -135,34 +208,40 @@ export async function detectComponent(component, { record, run = runCommand } = 
 
   const layers = [];
   const evidence = [];
-  const requirements = parseRequirements(await readText(join(component.target, "requirements.in")));
-  if (requirements.git.length) {
-    addLayer(layers, { type: "git", ...requirements.git[0], current: requirements.git[0].ref });
-    evidence.push("requirements.in");
-  }
-  if (requirements.pypi.length) {
-    addLayer(layers, { type: "pypi", ...requirements.pypi[0] });
-    evidence.push("requirements.in");
-  }
-
-  const worktree = await gitWorktree(component.target, run);
-  if (worktree) {
-    layers.unshift({ type: "git", ...worktree });
-    evidence.push(".git");
-  }
-
-  const pkg = await readPackage(join(component.target, "package.json"));
-  if (pkg) {
-    const rootNpm = npmLayer(pkg);
-    if (rootNpm) addLayer(layers, rootNpm);
-    const exactDependencies = Object.entries(pkg.dependencies || {}).filter(([, version]) => exactVersion(version));
-    if (!rootNpm && exactDependencies.length === 1) {
-      const [name, version] = exactDependencies[0];
-      addLayer(layers, { type: "npm", name, version, repository: null });
+  const roots = await metadataRoots(component.target, record?.entrypoints);
+  const seenRequirements = new Set();
+  let worktree;
+  for (const root of roots) {
+    for (const filename of ["requirements.in", "requirements.txt"]) {
+      const requirements = await readRequirements(join(root, filename), component.target, seenRequirements);
+      for (const entry of requirements.git) addLayer(layers, { type: "git", ...entry, current: entry.ref });
+      for (const entry of requirements.pypi) addLayer(layers, { type: "pypi", ...entry });
+      for (const path of requirements.files) addEvidence(evidence, evidencePath(component.target, path));
     }
-    evidence.push("package.json");
-  } else if (await exists(join(component.target, "package.json"))) {
-    evidence.push("invalid package.json");
+
+    const nestedWorktree = await gitWorktree(root, run);
+    if (nestedWorktree) {
+      addLayer(layers, { type: "git", ...nestedWorktree });
+      addEvidence(evidence, metadataEvidence(component.target, root, ".git"));
+      worktree ||= nestedWorktree;
+    }
+
+    const packagePath = join(root, "package.json");
+    const pkg = await readPackage(packagePath);
+    if (pkg) {
+      const rootNpm = npmLayer(pkg);
+      if (rootNpm) addLayer(layers, rootNpm);
+      const exactDependencies = Object.entries(pkg.dependencies || {}).filter(([, version]) => exactVersion(version));
+      if (!rootNpm && exactDependencies.length === 1) {
+        const [name, version] = exactDependencies[0];
+        addLayer(layers, { type: "npm", name, version, repository: null });
+      }
+      addEvidence(evidence, metadataEvidence(component.target, root, "package.json"));
+    } else if (await exists(packagePath)) {
+      addEvidence(evidence, metadataEvidence(component.target, root, "invalid package.json"));
+    }
+    for (const layer of await packageLockLayers(root)) addLayer(layers, layer);
+    if (await exists(join(root, "package-lock.json"))) addEvidence(evidence, metadataEvidence(component.target, root, "package-lock.json"));
   }
   for (const entrypoint of record?.entrypoints || []) {
     if (entrypoint === component.target) continue;
@@ -170,7 +249,7 @@ export async function detectComponent(component, { record, run = runCommand } = 
     const nestedNpm = npmLayer(nested, { nested: true });
     if (nestedNpm) {
       addLayer(layers, nestedNpm);
-      evidence.push("plugin entrypoint package.json");
+      addEvidence(evidence, "plugin entrypoint package.json");
     }
   }
   if (await exists(join(component.target, ".venv"))) layers.push({ type: "python-venv", path: ".venv" });

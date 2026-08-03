@@ -69,12 +69,13 @@ function ownerTarget(target, root) {
 }
 
 function executableTarget(command, mcpsRoot) {
-  if (!Array.isArray(command)) return null;
-  for (const argument of command) {
-    const path = localPath(argument, mcpsRoot);
-    if (path && within(mcpsRoot, path)) return ownerTarget(path, mcpsRoot);
-  }
-  return null;
+  if (!Array.isArray(command)) return { target: null, entrypoints: [] };
+  const entrypoints = [...new Set(command
+    .map((argument) => localPath(argument, mcpsRoot))
+    .filter((path) => path && within(mcpsRoot, path)))];
+  const owners = [...new Set(entrypoints.map((path) => ownerTarget(path, mcpsRoot)))];
+  if (owners.length !== 1) return { target: null, entrypoints };
+  return { target: owners[0], entrypoints };
 }
 
 function pluginName(spec, target) {
@@ -103,13 +104,14 @@ export async function discoverInventory(paths) {
   ]);
 
   for (const [name, entry] of Object.entries(opencode.mcp || {})) {
-    const target = entry?.type === "local" ? executableTarget(entry.command, mcpsRoot) : null;
+    const command = entry?.type === "local" ? executableTarget(entry.command, mcpsRoot) : { target: null, entrypoints: [] };
+    const target = command.target;
     const id = `mcp.${name}`;
     addRecord(records, {
       ...component(id, "mcp", name, target, target ? "manual" : "none"),
       active: true,
       hints: [{ type: entry?.type === "remote" ? "remote" : target ? "local" : "system" }],
-      entrypoints: target ? [target] : [],
+      entrypoints: command.entrypoints,
     });
   }
 
@@ -158,8 +160,11 @@ export async function bootstrapConfig(paths, { inventory = discoverInventory, ba
   if (existing) {
     if (!backfill) return { created: false, added: [] };
     const discovered = await inventory(paths);
+    const discoveredConfig = discovered.config || createConfig(Object.fromEntries(
+      (discovered.records || []).map((record) => [record.id, record.component]),
+    ));
     const additions = Object.fromEntries(
-      Object.entries(discovered.config.components).filter(([id]) => !(id in existing.components)),
+      Object.entries(discoveredConfig.components).filter(([id]) => !(id in existing.components)),
     );
     if (Object.keys(additions).length) {
       await saveConfig(paths, { ...existing, components: { ...existing.components, ...additions } });
