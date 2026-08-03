@@ -53,6 +53,11 @@ async function currentCommit(paths, state, run) {
   return output.code === 0 ? parseCommit(output) : state.baselineCommit;
 }
 
+async function workingTreeClean(paths, run) {
+  const output = await run(["git", "status", "--porcelain"], { cwd: paths.pluginRoot, timeoutMs: 5_000, maxOutputBytes: 8_192 });
+  return output.code === 0 && !firstOutputLine(output);
+}
+
 async function filesIn(root, path = root) {
   const rootStat = await lstat(path);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`Unsupported source path: ${relative(root, path) || "."}`);
@@ -99,27 +104,40 @@ export function createSelfUpdater({ pluginRoot, paths = resolveBootstrapPaths({ 
   if (typeof run !== "function") throw new Error("Self updater requires a command runner");
 
   async function check({ force = false, intervalHours = 24 } = {}) {
-    const state = await loadSelfState(paths);
+    let state = await loadSelfState(paths);
     const intervalMs = intervalHours * 60 * 60 * 1_000;
     if (!force && state.lastCheck?.checkedAt && now() - state.lastCheck.checkedAt < intervalMs) {
       return { ...state.lastCheck, skipped: true };
     }
-    const pkg = await readPackage(paths.pluginRoot);
-    const remote = repositoryUrl(pkg);
-    const current = await currentCommit(paths, state, run);
-    const output = await run(["git", "ls-remote", remote, `refs/heads/${BRANCH}`], { timeoutMs: 30_000, maxOutputBytes: 8_192 });
-    const latest = output.code === 0 ? parseCommit(output) : null;
-    const result = latest && current
-      ? { status: current === latest ? "current" : "update-available", summary: `${current.slice(0, 7)} -> ${latest.slice(0, 7)}`, current, latest }
-      : latest
-        ? { status: "manual-only", summary: `Running updater commit unknown; latest is ${latest.slice(0, 7)}`, current: null, latest }
-      : { status: "check-error", summary: firstOutputLine(output) || output.reason || "git ls-remote failed", current, latest: null };
-    await saveSelfState(paths, {
-      ...state,
-      baselineCommit: state.baselineCommit || (state.current === "baseline" ? current : null),
-      lastCheck: { checkedAt: now(), ...result },
-    });
-    return result;
+    const lock = await acquireBootstrapLock(paths.selfLockPath, { now });
+    if (!lock) return { ...(state.lastCheck || { status: "manual-only" }), skipped: true, summary: "Updater self-update is already running" };
+    try {
+      state = await loadSelfState(paths);
+      if (!force && state.lastCheck?.checkedAt && now() - state.lastCheck.checkedAt < intervalMs) {
+        return { ...state.lastCheck, skipped: true };
+      }
+      const pkg = await readPackage(paths.pluginRoot);
+      const remote = repositoryUrl(pkg);
+      const current = await currentCommit(paths, state, run);
+      const clean = await workingTreeClean(paths, run);
+      const output = await run(["git", "ls-remote", remote, `refs/heads/${BRANCH}`], { timeoutMs: 30_000, maxOutputBytes: 8_192 });
+      const latest = output.code === 0 ? parseCommit(output) : null;
+      const result = !clean
+        ? { status: "manual-only", summary: "Updater Git worktree is dirty", current, latest }
+        : latest && current
+          ? { status: current === latest ? "current" : "update-available", summary: `${current.slice(0, 7)} -> ${latest.slice(0, 7)}`, current, latest }
+          : latest
+            ? { status: "manual-only", summary: `Running updater commit unknown; latest is ${latest.slice(0, 7)}`, current: null, latest }
+            : { status: "check-error", summary: firstOutputLine(output) || output.reason || "git ls-remote failed", current, latest: null };
+      await saveSelfState(paths, {
+        ...state,
+        baselineCommit: state.baselineCommit || (state.current === "baseline" ? current : null),
+        lastCheck: { checkedAt: now(), ...result },
+      });
+      return result;
+    } finally {
+      await lock.release();
+    }
   }
 
   async function stage(expected) {
@@ -141,6 +159,7 @@ export function createSelfUpdater({ pluginRoot, paths = resolveBootstrapPaths({ 
       if (state.candidate && state.candidate !== commit) throw new Error("Another self-update is already staged");
       if (state.candidate === commit) return { skipped: true, reason: "already staged", commit };
       if (state.current === commit) return { skipped: true, reason: "already current", commit };
+      if (!(await workingTreeClean(paths, run))) throw new Error("Updater Git worktree is dirty");
       const pkg = await readPackage(paths.pluginRoot);
       const remote = repositoryUrl(pkg);
       const source = join(stage, "source");
@@ -186,11 +205,17 @@ export function createSelfUpdater({ pluginRoot, paths = resolveBootstrapPaths({ 
   }
 
   async function rollback() {
-    const state = await loadSelfState(paths);
-    if (state.current === "baseline" || !state.previous) return { skipped: true, reason: "no previous updater runtime" };
-    if (state.candidate) return { skipped: true, reason: "another self-update is already staged" };
-    await saveSelfState(paths, { ...state, candidate: state.previous, lastFailure: null });
-    return { skipped: false, commit: state.previous, summary: "Previous updater runtime staged; restart OpenCode to activate" };
+    const lock = await acquireBootstrapLock(paths.selfLockPath, { now });
+    if (!lock) return { skipped: true, reason: "Updater self-update is already running" };
+    try {
+      const state = await loadSelfState(paths);
+      if (state.current === "baseline" || !state.previous) return { skipped: true, reason: "no previous updater runtime" };
+      if (state.candidate) return { skipped: true, reason: "another self-update is already staged" };
+      await saveSelfState(paths, { ...state, candidate: state.previous, lastFailure: null });
+      return { skipped: false, commit: state.previous, summary: "Previous updater runtime staged; restart OpenCode to activate" };
+    } finally {
+      await lock.release();
+    }
   }
 
   return { check, stage, status, rollback };

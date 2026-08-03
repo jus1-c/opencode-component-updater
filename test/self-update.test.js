@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -180,4 +180,30 @@ test("uses cached self-check results until the daily interval expires", async ()
   assert.equal(cached.skipped, true);
   assert.equal(nextDay.status, "update-available");
   assert.equal(remoteChecks, 2);
+});
+
+test("refuses self-update from a dirty updater checkout", async () => {
+  const lab = await fixture();
+  await pushVersion(lab, "two");
+  await writeFile(join(lab.pluginRoot, "local-change.txt"), "dirty\n");
+  const updater = createSelfUpdater({ pluginRoot: lab.pluginRoot, paths: lab.paths, run: runCommand });
+
+  const checked = await updater.check({ force: true });
+  assert.equal(checked.status, "manual-only");
+  assert.match(checked.summary, /dirty/);
+  await assert.rejects(updater.stage(), /does not match/);
+});
+
+test("skips a self-check while staging holds the shared lock", async () => {
+  const lab = await fixture();
+  const lock = await open(lab.paths.selfLockPath, "wx").catch(async () => {
+    await mkdir(join(lab.paths.stateRoot, "locks"), { recursive: true });
+    return open(lab.paths.selfLockPath, "wx");
+  });
+  await lock.writeFile(JSON.stringify({ token: "other", startedAt: Date.now() }));
+  await lock.close();
+  const updater = createSelfUpdater({ pluginRoot: lab.pluginRoot, paths: lab.paths, run: runCommand });
+  const result = await updater.check({ force: true });
+  assert.equal(result.skipped, true);
+  assert.match(result.summary, /already running/);
 });

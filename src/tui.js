@@ -205,7 +205,7 @@ export function createTuiPlugin({
         }
       }).catch(() => {});
       checkSelf();
-      const timer = setIntervalImpl(checkSelf, 24 * 60 * 60 * 1_000);
+      const timer = setIntervalImpl(checkSelf, 60 * 60 * 1_000);
       timer.unref?.();
       api.lifecycle.onDispose(() => clearIntervalImpl(timer));
     }

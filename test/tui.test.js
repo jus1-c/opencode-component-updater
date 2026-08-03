@@ -88,7 +88,7 @@ test("checks self-update daily without staging it automatically", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(checked, 1);
   assert.equal(staged, 0);
-  assert.equal(interval, 24 * 60 * 60 * 1_000);
+  assert.equal(interval, 60 * 60 * 1_000);
   assert.ok(toasts.some((toast) => toast.title === "Updater self-update" && toast.variant === "warning"));
   assert.equal(commands.length, 2);
   scheduled();
