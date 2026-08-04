@@ -10,7 +10,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	progressbar "charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/spinner"
+	"github.com/charmbracelet/x/ansi"
 )
+
+func TestHumanTimestampIncludesAbsoluteAndRelativeTime(t *testing.T) {
+	stamp := time.Now().UTC().Add(-4*time.Hour - 36*time.Minute)
+	value := humanTimestamp(stamp.UnixMilli())
+	if !strings.Contains(value, stamp.Format("Jan 2, 2006 15:04 UTC")) || !strings.Contains(value, "4 hours and 36 minutes ago") {
+		t.Fatalf("unexpected human timestamp: %q", value)
+	}
+}
+
+func TestOperationViewIncludesProgressAndLogs(t *testing.T) {
+	model := operationModel{title: "Upgrade", width: 80, height: 24, latest: progress{Phase: "apply", Component: "mcp.example", Detail: "swapping files", Current: 1, Total: 2}, logs: []string{"12:00:00  APPLY  mcp.example  swapping files"}}
+	model.bar = progressbar.New(progressbar.WithWidth(60))
+	model.spinner = spinner.New()
+	view := ansi.Strip(model.View().Content)
+	for _, expected := range []string{"Upgrade", "APPLY", "mcp.example", "50%", "Logs", "swapping files"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("operation view missing %q:\n%s", expected, view)
+		}
+	}
+}
 
 func TestCheckPreservesLastGoodAfterFailure(t *testing.T) {
 	root := t.TempDir()

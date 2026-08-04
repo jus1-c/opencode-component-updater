@@ -63,7 +63,7 @@ func runSelfUpdateCheck(ctx context.Context, value paths, out io.Writer) error {
 	if err := saveSelfUpdateCheck(value, result); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%s: %s\n", result.Status, result.Summary)
+	writeStyled(out, statusBadge(result.Status)+"  "+bodyStyle.Render(result.Summary))
 	return nil
 }
 

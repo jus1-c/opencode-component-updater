@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type openCodeRunningError struct {
@@ -41,7 +42,7 @@ func waitForOpenCodeExit(ctx context.Context) error {
 	} else if !interactiveTerminal() {
 		return err
 	}
-	model := processGuardModel{ctx: ctx}
+	model := processGuardModel{ctx: ctx, width: 80}
 	final, err := tea.NewProgram(model, tea.WithOutput(os.Stderr)).Run()
 	if err != nil {
 		return err
@@ -58,6 +59,7 @@ type processGuardModel struct {
 	ctx       context.Context
 	processes []openCodeProcess
 	err       error
+	width     int
 }
 
 func (model processGuardModel) Init() tea.Cmd {
@@ -66,6 +68,9 @@ func (model processGuardModel) Init() tea.Cmd {
 
 func (model processGuardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
+	case tea.WindowSizeMsg:
+		model.width = typed.Width
+		return model, nil
 	case processScanMessage:
 		if typed.err != nil {
 			model.err = typed.err
@@ -88,12 +93,13 @@ func (model processGuardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model processGuardModel) View() tea.View {
-	lines := []string{"OpenCode Component Updater", "", "OpenCode is still running.", "", "PID    EXECUTABLE"}
+	warning := lipgloss.NewStyle().Bold(true).Foreground(yellow).Render("⚠ BLOCKED")
+	lines := []string{warning + "  " + bodyStyle.Render("OpenCode is still running."), "", labelStyle.Render("PID     EXECUTABLE")}
 	for _, process := range model.processes {
-		lines = append(lines, fmt.Sprintf("%-6d %s", process.PID, fallback(process.Executable, process.Command)))
+		lines = append(lines, fmt.Sprintf("%s  %s", componentStyle.Render(fmt.Sprintf("%-7d", process.PID)), dimStyle.Render(fallback(process.Executable, process.Command))))
 	}
-	lines = append(lines, "", "Close every OpenCode process before changing components.", "", "r: retry    q: exit")
-	return tea.NewView(strings.Join(lines, "\n") + "\n")
+	lines = append(lines, "", bodyStyle.Render("Close every OpenCode process before changing components."), "", keyHint("r", "retry")+"    "+keyHint("q", "cancel"))
+	return tea.NewView(panel("OpenCode Component Updater", strings.Join(lines, "\n"), clamp(model.width-2, 20, 100), yellow) + "\n")
 }
 
 func scanOpenCodeProcesses() tea.Cmd {
