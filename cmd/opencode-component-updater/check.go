@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +20,6 @@ var commitPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 var semverPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
 var secretPattern = regexp.MustCompile(`(?i)\b(bearer\s+|api[_-]?key|token|password|secret)([:=\s]+)([^\s]+)`)
 var urlCredentialPattern = regexp.MustCompile(`//[^\s/@:]+(?::[^\s/@]+)?@`)
-var integrityPattern = regexp.MustCompile(`^sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}$`)
 
 type commandOutput struct {
 	Code   int
@@ -535,11 +533,6 @@ func customCheck(ctx context.Context, value paths, id string, item component, so
 		Summary       string `json:"summary"`
 		Current       string `json:"current"`
 		Latest        string `json:"latest"`
-		Artifact      *struct {
-			URL       string `json:"url"`
-			Integrity string `json:"integrity"`
-		} `json:"artifact"`
-		SourceCommit string `json:"sourceCommit"`
 	}
 	if err := json.Unmarshal(contents, &reported); err != nil || reported.SchemaVersion != 1 {
 		result.Status = "check-error"
@@ -555,23 +548,6 @@ func customCheck(ctx context.Context, value paths, id string, item component, so
 	result.Summary = sanitizeSummary(reported.Summary)
 	result.Current = reported.Current
 	result.Latest = reported.Latest
-	if reported.SourceCommit != "" {
-		if !commitPattern.MatchString(reported.SourceCommit) {
-			result.Status = "check-error"
-			result.Summary = "custom check reported an invalid source commit"
-			return result
-		}
-		result.SourceCommit = strings.ToLower(reported.SourceCommit)
-	}
-	if reported.Artifact != nil {
-		artifact := artifactInfo{URL: reported.Artifact.URL, Integrity: reported.Artifact.Integrity}
-		if err := validateArtifact(artifact); err != nil {
-			result.Status = "check-error"
-			result.Summary = sanitizeSummary(err.Error())
-			return result
-		}
-		result.Artifact = &artifact
-	}
 	if isGoodStatus(result.Status) && (!validExact(result.Current) || !validExact(result.Latest)) {
 		result.Status = "check-error"
 		result.Summary = "custom check requires exact current and latest values"
@@ -580,20 +556,4 @@ func customCheck(ctx context.Context, value paths, id string, item component, so
 		result.Summary = result.Status
 	}
 	return result
-}
-
-// validateArtifact keeps published-release downloads pinned to an https URL with
-// a supported subresource integrity digest.
-func validateArtifact(artifact artifactInfo) error {
-	if artifact.URL == "" || artifact.Integrity == "" {
-		return errors.New("artifact requires both a url and an integrity digest")
-	}
-	parsed, err := url.Parse(artifact.URL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return errors.New("artifact url must be an absolute https url")
-	}
-	if !integrityPattern.MatchString(artifact.Integrity) {
-		return errors.New("artifact integrity must be sha256/sha384/sha512 base64")
-	}
-	return nil
 }

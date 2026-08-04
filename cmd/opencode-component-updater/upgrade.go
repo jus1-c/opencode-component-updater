@@ -27,8 +27,6 @@ type plannedComponent struct {
 	Latest            string        `json:"latest"`
 	ResultSource      string        `json:"resultSource"`
 	Source            sourceInfo    `json:"source"`
-	Artifact          *artifactInfo `json:"artifact,omitempty"`
-	SourceCommit      string        `json:"sourceCommit,omitempty"`
 	SourceFingerprint string        `json:"sourceFingerprint"`
 	ConfigFingerprint string        `json:"configFingerprint"`
 	PlanSHA256        string        `json:"planSha256"`
@@ -173,8 +171,6 @@ func buildUpgradePlan(ctx context.Context, value paths, summary checkSummary, be
 			Latest:            result.Latest,
 			ResultSource:      origin,
 			Source:            *result.Source,
-			Artifact:          result.Artifact,
-			SourceCommit:      result.SourceCommit,
 			SourceFingerprint: result.SourceFingerprint,
 			ConfigFingerprint: result.ConfigFingerprint,
 		}
@@ -299,8 +295,17 @@ func stageComponent(ctx context.Context, value paths, settings defaults, item co
 		return plannedComponent{}, err
 	}
 	manifestPath := filepath.Join(stage, ".opencode-component-updater-manifest.json")
-	environment := stageEnvironment(componentPlan, stage, manifestPath, planPath)
-	output := runCommand(ctx, item.Update.Command, stage, environment, settings.UpdateTimeoutMS, settings.MaxOutputBytes)
+	output := runCommand(ctx, item.Update.Command, stage, map[string]string{
+		"OPENCODE_UPDATER_COMPONENT_ID": componentPlan.ID,
+		"OPENCODE_UPDATER_TARGET":       componentPlan.Target,
+		"OPENCODE_UPDATER_STAGE":        stage,
+		"OPENCODE_UPDATER_MANIFEST":     manifestPath,
+		"OPENCODE_UPDATER_PLAN":         planPath,
+		"OPENCODE_UPDATER_PLAN_SHA256":  componentPlan.PlanSHA256,
+		"OPENCODE_UPDATER_CURRENT":      componentPlan.Current,
+		"OPENCODE_UPDATER_LATEST":       componentPlan.Latest,
+		"OPENCODE_UPDATER_PLAN_SOURCE":  componentPlan.ResultSource,
+	}, settings.UpdateTimeoutMS, settings.MaxOutputBytes)
 	if output.Code != 0 || output.Reason != "" {
 		detail := firstOutputLine(output)
 		if detail == "" {
@@ -313,7 +318,17 @@ func stageComponent(ctx context.Context, value paths, settings defaults, item co
 		return plannedComponent{}, err
 	}
 	if len(item.Update.Healthcheck) > 0 {
-		output := runCommand(ctx, item.Update.Healthcheck, stage, environment, settings.UpdateTimeoutMS, settings.MaxOutputBytes)
+		output := runCommand(ctx, item.Update.Healthcheck, stage, map[string]string{
+			"OPENCODE_UPDATER_COMPONENT_ID": componentPlan.ID,
+			"OPENCODE_UPDATER_TARGET":       componentPlan.Target,
+			"OPENCODE_UPDATER_STAGE":        stage,
+			"OPENCODE_UPDATER_MANIFEST":     manifestPath,
+			"OPENCODE_UPDATER_PLAN":         planPath,
+			"OPENCODE_UPDATER_PLAN_SHA256":  componentPlan.PlanSHA256,
+			"OPENCODE_UPDATER_CURRENT":      componentPlan.Current,
+			"OPENCODE_UPDATER_LATEST":       componentPlan.Latest,
+			"OPENCODE_UPDATER_PLAN_SOURCE":  componentPlan.ResultSource,
+		}, settings.UpdateTimeoutMS, settings.MaxOutputBytes)
 		if output.Code != 0 || output.Reason != "" {
 			detail := firstOutputLine(output)
 			if detail == "" {
@@ -325,30 +340,6 @@ func stageComponent(ctx context.Context, value paths, settings defaults, item co
 	componentPlan.Manifest = manifest
 	cleanup = false
 	return componentPlan, nil
-}
-
-func stageEnvironment(componentPlan plannedComponent, stage, manifestPath, planPath string) map[string]string {
-	environment := map[string]string{
-		"OPENCODE_UPDATER_COMPONENT_ID": componentPlan.ID,
-		"OPENCODE_UPDATER_TARGET":       componentPlan.Target,
-		"OPENCODE_UPDATER_STAGE":        stage,
-		"OPENCODE_UPDATER_MANIFEST":     manifestPath,
-		"OPENCODE_UPDATER_PLAN":         planPath,
-		"OPENCODE_UPDATER_PLAN_SHA256":  componentPlan.PlanSHA256,
-		"OPENCODE_UPDATER_CURRENT":      componentPlan.Current,
-		"OPENCODE_UPDATER_LATEST":       componentPlan.Latest,
-		"OPENCODE_UPDATER_PLAN_SOURCE":  componentPlan.ResultSource,
-		"OPENCODE_UPDATER_SOURCE_URL":   componentPlan.Source.URL,
-		"OPENCODE_UPDATER_SOURCE_TYPE":  componentPlan.Source.Type,
-		"OPENCODE_UPDATER_SOURCE_NAME":  componentPlan.Source.Name,
-		// Provenance only; registry components are pinned by artifact, not by commit.
-		"OPENCODE_UPDATER_SOURCE_COMMIT": componentPlan.SourceCommit,
-	}
-	if componentPlan.Artifact != nil {
-		environment["OPENCODE_UPDATER_ARTIFACT_URL"] = componentPlan.Artifact.URL
-		environment["OPENCODE_UPDATER_ARTIFACT_INTEGRITY"] = componentPlan.Artifact.Integrity
-	}
-	return environment
 }
 
 func cleanupStages(components []plannedComponent) {
