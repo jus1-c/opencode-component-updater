@@ -124,7 +124,7 @@ func createArchive(root, output string) error {
 			if err != nil {
 				return err
 			}
-		} else if !info.IsDir() && !info.Mode().IsRegular() || info.Mode().IsRegular() && hasExternalHardlink(info) {
+		} else if !info.IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("unsafe backup entry: %s", relative)
 		}
 		header, err := tar.FileInfoHeader(info, linkTarget)

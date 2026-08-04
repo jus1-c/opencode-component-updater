@@ -227,7 +227,7 @@ func assertSafeTree(root, path string, allowInternalLinks bool) error {
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported entry: %s", current)
 		}
-		if info.Mode().IsRegular() && hasExternalHardlink(info) {
+		if !allowInternalLinks && info.Mode().IsRegular() && hasExternalHardlink(info) {
 			return fmt.Errorf("hardlinked file: %s", current)
 		}
 		return nil

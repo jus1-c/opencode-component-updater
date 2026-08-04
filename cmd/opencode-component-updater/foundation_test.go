@@ -262,6 +262,13 @@ func TestUpgradeReplacesLegacyInternalSymlinkAndRollbackRestoresIt(t *testing.T)
 	if err := os.Symlink("../example/bin/cli.js", filepath.Join(bin, "example")); err != nil {
 		t.Fatal(err)
 	}
+	cache := filepath.Join(root, "cache-file")
+	if err := os.WriteFile(cache, []byte("cached\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(cache, filepath.Join(target, "runtime", "node_modules", "cached.txt")); err != nil {
+		t.Fatal(err)
+	}
 	value := testPaths(root)
 	item := discoveredComponent("plugin", "example", &target)
 	item.Enabled = true
@@ -294,6 +301,10 @@ func TestUpgradeReplacesLegacyInternalSymlinkAndRollbackRestoresIt(t *testing.T)
 	destination, err := os.Readlink(link)
 	if err != nil || destination != "../example/bin/cli.js" {
 		t.Fatalf("rollback did not restore internal symlink: %q, %v", destination, err)
+	}
+	contents, err := os.ReadFile(filepath.Join(target, "runtime", "node_modules", "cached.txt"))
+	if err != nil || string(contents) != "cached\n" {
+		t.Fatalf("rollback did not restore legacy hardlink content: %q, %v", contents, err)
 	}
 }
 
