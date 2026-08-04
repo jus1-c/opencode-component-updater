@@ -118,10 +118,16 @@ func createArchive(root, output string) error {
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() && !info.Mode().IsRegular() || info.Mode().IsRegular() && hasExternalHardlink(info) {
+		linkTarget := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+		} else if !info.IsDir() && !info.Mode().IsRegular() || info.Mode().IsRegular() && hasExternalHardlink(info) {
 			return fmt.Errorf("unsafe backup entry: %s", relative)
 		}
-		header, err := tar.FileInfoHeader(info, "")
+		header, err := tar.FileInfoHeader(info, linkTarget)
 		if err != nil {
 			return err
 		}
@@ -187,10 +193,15 @@ func verifyArchive(path string) (string, error) {
 			file.Close()
 			return "", fmt.Errorf("unsafe archive path: %w", err)
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeDir {
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeDir && header.Typeflag != tar.TypeSymlink {
 			gzipReader.Close()
 			file.Close()
 			return "", fmt.Errorf("unsupported archive entry: %s", header.Name)
+		}
+		if header.Typeflag == tar.TypeSymlink && header.Linkname == "" {
+			gzipReader.Close()
+			file.Close()
+			return "", fmt.Errorf("empty archive symlink: %s", header.Name)
 		}
 		if _, err := io.Copy(io.Discard, tarReader); err != nil {
 			gzipReader.Close()

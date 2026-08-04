@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -239,6 +241,137 @@ func TestStrictUpgradeStagesThenAppliesAndArchives(t *testing.T) {
 	}
 	if _, err := os.Stat(value.JournalPath); !os.IsNotExist(err) {
 		t.Fatalf("journal should be removed: %v", err)
+	}
+}
+
+func TestUpgradeReplacesLegacyInternalSymlinkAndRollbackRestoresIt(t *testing.T) {
+	withoutLiveOpenCode(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "component")
+	bin := filepath.Join(target, "runtime", "node_modules", ".bin")
+	packageBin := filepath.Join(target, "runtime", "node_modules", "example", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(packageBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageBin, "cli.js"), []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../example/bin/cli.js", filepath.Join(bin, "example")); err != nil {
+		t.Fatal(err)
+	}
+	value := testPaths(root)
+	item := discoveredComponent("plugin", "example", &target)
+	item.Enabled = true
+	item.Policy.Apply = "manifest"
+	item.Policy.AllowedPaths = []string{"runtime/node_modules"}
+	item.Check.Command = []string{"sh", "-c", "printf '{\"schemaVersion\":1,\"status\":\"update-available\",\"current\":\"1.0.0\",\"latest\":\"1.1.0\"}' > \"$OPENCODE_UPDATER_CHECK_RESULT\""}
+	item.Update.Command = []string{"sh", "-c", "mkdir -p \"$OPENCODE_UPDATER_STAGE/runtime/node_modules\"; printf new > \"$OPENCODE_UPDATER_STAGE/runtime/node_modules/version.txt\"; printf '{\"schemaVersion\":2,\"planSha256\":\"%s\",\"paths\":[\"runtime/node_modules\"]}' \"$OPENCODE_UPDATER_PLAN_SHA256\" > \"$OPENCODE_UPDATER_MANIFEST\""}
+	if err := saveConfig(value.ConfigPath, config{SchemaVersion: configSchemaVersion, Defaults: defaultDefaults(), Components: map[string]component{"plugin.example": item}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgradeAll(context.Background(), value, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadState(value.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := state.Components[componentKey("plugin.example", item)].LastApplied
+	if applied == nil {
+		t.Fatal("missing applied update state")
+	}
+	choices, err := listBackupChoices(value, "plugin.example")
+	if err != nil || len(choices) != 1 {
+		t.Fatalf("expected one rollback choice, got %v, %v", choices, err)
+	}
+	if err := rollbackBackup(context.Background(), value, choices[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(target, "runtime", "node_modules", ".bin", "example")
+	destination, err := os.Readlink(link)
+	if err != nil || destination != "../example/bin/cli.js" {
+		t.Fatalf("rollback did not restore internal symlink: %q, %v", destination, err)
+	}
+}
+
+func TestManifestAllowsLegacyTargetSymlinkAndRejectsStagedSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "component")
+	stage := filepath.Join(root, "stage")
+	for _, path := range []string{target, stage} {
+		if err := os.MkdirAll(filepath.Join(path, "runtime"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(target, "runtime", "escape")); err != nil {
+		t.Fatal(err)
+	}
+	item := discoveredComponent("plugin", "example", &target)
+	item.Policy.Apply = "manifest"
+	item.Policy.AllowedPaths = []string{"runtime"}
+	plan := plannedComponent{ID: "plugin.example", Target: target, PlanSHA256: "sha256:test"}
+	manifest := stageManifest{SchemaVersion: 2, PlanSHA256: plan.PlanSHA256, Paths: []string{"runtime"}}
+	if err := writeJSONAtomic(filepath.Join(stage, manifestFile), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateManifest(item, plan, stage); err != nil {
+		t.Fatalf("legacy target symlink should be replaceable: %v", err)
+	}
+	if err := os.Remove(filepath.Join(target, "runtime", "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing", filepath.Join(stage, "runtime", "staged-link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateManifest(item, plan, stage); err == nil {
+		t.Fatal("expected staged symlink to fail")
+	}
+}
+
+func TestArchiveExtractionRejectsFileBelowSymlink(t *testing.T) {
+	root := t.TempDir()
+	archive := filepath.Join(root, "unsafe.tar.gz")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gzipWriter := gzip.NewWriter(file)
+	tarWriter := tar.NewWriter(gzipWriter)
+	entries := []struct {
+		header *tar.Header
+		body   string
+	}{
+		{header: &tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "target", Mode: 0o777}},
+		{header: &tar.Header{Name: "link/file", Typeflag: tar.TypeReg, Mode: 0o600, Size: 4}, body: "evil"},
+	}
+	for _, entry := range entries {
+		if err := tarWriter.WriteHeader(entry.header); err != nil {
+			t.Fatal(err)
+		}
+		if entry.body != "" {
+			if _, err := tarWriter.Write([]byte(entry.body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractArchive(archive, filepath.Join(root, "destination")); err == nil {
+		t.Fatal("expected archive path through symlink to fail")
 	}
 }
 

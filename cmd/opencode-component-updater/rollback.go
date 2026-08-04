@@ -256,6 +256,9 @@ func extractArchive(archive, destination string) error {
 		if err != nil {
 			return err
 		}
+		if err := assertNoSymlinkParents(destination, path); err != nil {
+			return fmt.Errorf("unsafe archive path %s: %w", relative, err)
+		}
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(path, 0o700); err != nil {
@@ -280,6 +283,16 @@ func extractArchive(archive, destination string) error {
 			}
 			if closeErr != nil {
 				return closeErr
+			}
+		case tar.TypeSymlink:
+			if header.Linkname == "" {
+				return fmt.Errorf("empty archive symlink: %s", header.Name)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return err
+			}
+			if err := os.Symlink(header.Linkname, path); err != nil {
+				return err
 			}
 		default:
 			return fmt.Errorf("unsupported archive entry: %s", header.Name)

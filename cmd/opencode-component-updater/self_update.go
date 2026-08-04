@@ -500,7 +500,7 @@ func validateCandidatePackage(root string) error {
 
 func checkCandidatePlugin(ctx context.Context, root string) error {
 	for _, path := range []string{filepath.Join(root, "index.js"), filepath.Join(root, "src")} {
-		if err := assertSafeTree(root, path); err != nil {
+		if err := assertSafeTree(root, path, false); err != nil {
 			return err
 		}
 	}
