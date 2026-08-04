@@ -52,6 +52,139 @@ func TestCheckPreservesLastGoodAfterFailure(t *testing.T) {
 	}
 }
 
+func TestGitReleaseDefaultsAndFallsBackToHead(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repository, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, repository, "git", "init")
+	runTestCommand(t, repository, "git", "config", "user.email", "test@example.com")
+	runTestCommand(t, repository, "git", "config", "user.name", "Test")
+	runTestCommand(t, repository, "git", "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repository, "version"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, repository, "git", "add", ".")
+	runTestCommand(t, repository, "git", "commit", "-m", "one")
+	first := runTestCommand(t, repository, "git", "rev-parse", "HEAD")
+	runTestCommand(t, repository, "git", "tag", "v1.0.0")
+	if err := os.WriteFile(filepath.Join(repository, "version"), []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, repository, "git", "add", ".")
+	runTestCommand(t, repository, "git", "commit", "-m", "two")
+	head := runTestCommand(t, repository, "git", "rev-parse", "HEAD")
+
+	latest, label, err := gitLatest(context.Background(), repository, "release", defaultDefaults())
+	if err != nil || latest != first || !strings.HasPrefix(label, "v1.0.0") {
+		t.Fatalf("release selection failed: %s %s %v", latest, label, err)
+	}
+	latest, _, err = gitLatest(context.Background(), repository, "head", defaultDefaults())
+	if err != nil || latest != head {
+		t.Fatalf("HEAD selection failed: %s %v", latest, err)
+	}
+	runTestCommand(t, repository, "git", "tag", "-d", "v1.0.0")
+	latest, _, err = gitLatest(context.Background(), repository, "release", defaultDefaults())
+	if err != nil || latest != head {
+		t.Fatalf("release fallback failed: %s %v", latest, err)
+	}
+}
+
+func TestCompactConfigInfersIdentityAndDefaults(t *testing.T) {
+	target := t.TempDir()
+	input := config{SchemaVersion: configSchemaVersion, Components: map[string]component{"mcp.example": {Target: &target, Enabled: true}}}
+	item := input.Components["mcp.example"]
+	item.Source.Type = "script"
+	input.Components["mcp.example"] = item
+	normalized, err := normalizeConfig(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item = normalized.Components["mcp.example"]
+	if item.Kind != "mcp" || item.Name != "example" || item.Scope != "global" || item.Policy.Apply != "manifest" || item.Policy.Dirty != "refuse" {
+		t.Fatalf("compact defaults not applied: %#v", item)
+	}
+}
+
+func TestConfiguredNPMRejectsPackageRootInstall(t *testing.T) {
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "package.json"), []byte(`{"name":"example","version":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item := discoveredComponent("plugin", "example", &target)
+	item.Source.Type = "npm"
+	item.Source.Name = "example"
+	if _, err := configuredSource(context.Background(), item, target); err == nil || !strings.Contains(err.Error(), "component script") {
+		t.Fatalf("package-root install accepted: %v", err)
+	}
+}
+
+func TestConfiguredGitRejectsWrongOrigin(t *testing.T) {
+	target := t.TempDir()
+	source := filepath.Join(target, "source")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, source, "git", "init")
+	runTestCommand(t, source, "git", "config", "user.email", "test@example.com")
+	runTestCommand(t, source, "git", "config", "user.name", "Test")
+	runTestCommand(t, source, "git", "remote", "add", "origin", "https://example.invalid/wrong.git")
+	if err := os.WriteFile(filepath.Join(source, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, source, "git", "add", ".")
+	runTestCommand(t, source, "git", "commit", "-m", "source")
+	item := discoveredComponent("mcp", "example", &target)
+	item.Source.Type = "git"
+	item.Source.URL = "https://example.invalid/right.git"
+	item.Source.Path = "source"
+	if _, err := configuredSource(context.Background(), item, target); err == nil || !strings.Contains(err.Error(), "origin") {
+		t.Fatalf("wrong origin accepted: %v", err)
+	}
+}
+
+func TestConventionalComponentScriptRunsLifecycle(t *testing.T) {
+	withoutLiveOpenCode(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "component")
+	if err := os.MkdirAll(filepath.Join(target, "runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "runtime", "version.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+set -eu
+case "$1" in
+check) printf '{"schemaVersion":1,"status":"update-available","current":"1.0.0","latest":"1.1.0"}' > "$OPENCODE_UPDATER_CHECK_RESULT" ;;
+update) mkdir -p "$OPENCODE_UPDATER_STAGE/runtime"; printf new > "$OPENCODE_UPDATER_STAGE/runtime/version.txt"; printf '{"schemaVersion":2,"planSha256":"%s","paths":["runtime"]}' "$OPENCODE_UPDATER_PLAN_SHA256" > "$OPENCODE_UPDATER_MANIFEST" ;;
+healthcheck) test "$(cat "$OPENCODE_UPDATER_STAGE/runtime/version.txt")" = new ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(target, "component-updater"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	value := testPaths(root)
+	item := discoveredComponent("plugin", "example", &target)
+	item.Enabled = true
+	item.Source.Type = "script"
+	item.Policy.Apply = "manifest"
+	if err := saveConfig(value.ConfigPath, config{SchemaVersion: configSchemaVersion, Defaults: defaultDefaults(), Components: map[string]component{"plugin.example": item}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgradeAll(context.Background(), value, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(target, "runtime", "version.txt"))
+	if err != nil || string(contents) != "new" {
+		t.Fatalf("script update failed: %q %v", contents, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "component-updater")); err != nil {
+		t.Fatalf("component script was overwritten: %v", err)
+	}
+}
+
 func TestOpenCodeProcessClassification(t *testing.T) {
 	if !isOpenCodeProcess("/home/c/.opencode/bin/opencode", "other", true) {
 		t.Fatal("expected exact executable name to match")

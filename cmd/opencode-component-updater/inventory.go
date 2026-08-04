@@ -98,7 +98,6 @@ func readOptionalJSON(path string, destination any) error {
 
 func discoveredComponent(kind, name string, target *string) component {
 	item := component{Scope: "global", Kind: kind, Name: name, Target: target}
-	item.Source.Mode = "auto"
 	item.Policy.Apply = "none"
 	if target != nil {
 		item.Policy.Apply = "manual"

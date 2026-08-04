@@ -55,8 +55,14 @@ func validateManifest(item component, componentPlan plannedComponent, stage stri
 	if err != nil {
 		return stageManifest{}, fmt.Errorf("protected paths: %w", err)
 	}
-	if len(allowed) == 0 {
+	if len(allowed) == 0 && item.Source.Type == "" {
 		return stageManifest{}, errors.New("component has no allowed update paths")
+	}
+	if len(allowed) == 0 {
+		allowed = paths
+	}
+	if item.Source.Type == "script" {
+		protected = append(protected, "component-updater")
 	}
 	for _, path := range paths {
 		if !withinAny(path, allowed) {

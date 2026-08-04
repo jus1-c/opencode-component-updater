@@ -68,14 +68,54 @@ opencode-component-updater doctor
 
 ## Component Configuration
 
-Use `config/components.example.json` as the schema-2 baseline. A component is
-eligible for automatic upgrade only when all conditions hold:
+Use `config/components.example.json` as the schema-2 baseline. Inventory keeps
+every discovered MCP and plugin, including disabled external components.
+Component IDs carry kind and name (`mcp.example`, `plugin.example`), so compact
+entries normally need only `enabled`, `target`, and `source`. Scope, safe policy
+defaults, and empty command/path lists are inferred.
+
+Built-in sources remove per-component command wiring:
+
+```json
+{
+  "enabled": true,
+  "target": "/home/c/.config/opencode/mcps/example",
+  "source": {
+    "type": "git",
+    "url": "https://github.com/example/server.git",
+    "path": "source",
+    "track": "release"
+  }
+}
+```
+
+Supported source types:
+
+- `git`: newest semver release by default, falling back to default-branch HEAD
+  when no release exists. Set `track: "head"` to always track HEAD. `path` is
+  required and names the owned checkout path below the component directory.
+- `npm`: newest published version and registry integrity. `name` is required;
+  optional `path` points at the wrapper/runtime containing `package.json`.
+  This driver manages a dependency wrapper. A package-root installation uses a
+  component script because replacing its source/build layout is package-specific.
+- `pypi`: newest published version and SHA-256 artifact. `name` is required;
+  optional `path` points at the Python runtime root.
+- `script`: executable regular file `<target>/component-updater`, invoked as
+  `check`, `update`, and `healthcheck`.
+
+Script `check` writes the schema-1 result below. `update` writes staged output
+and a schema-2 manifest. `healthcheck` verifies that stage before apply. The
+script itself is protected from staged replacement. Component-specific logic
+belongs in this file, never in updater core.
+
+Legacy command arrays remain accepted during migration. A component is
+eligible for automatic upgrade when:
 
 ```text
 enabled == true
 target is set
 policy.apply == "manifest"
-update.command is non-empty
+source.type is set or update.command is non-empty
 ```
 
 Checks may write this exact JSON to `OPENCODE_UPDATER_CHECK_RESULT`:
@@ -91,9 +131,9 @@ Checks may write this exact JSON to `OPENCODE_UPDATER_CHECK_RESULT`:
 ```
 
 `current` and `latest` must be exact semver values or 40-character commits.
-Update commands receive immutable plan, stage, manifest, current, latest, and
-source environment variables. They write a schema-2 manifest naming only
-allowed paths. Symlinks, external hardlinks, protected paths, traversal, and
+Update commands and scripts receive immutable plan, stage, manifest, current,
+latest, and source environment variables. They write a schema-2 manifest naming
+only owned paths. Symlinks, external hardlinks, protected paths, traversal, and
 overlapping paths are rejected.
 
 Backups are verified `.tar.gz` archives with SHA-256 metadata. Three archives

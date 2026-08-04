@@ -6,5 +6,16 @@
     "updateTimeoutMs": 1800000,
     "maxOutputBytes": 65536
   },
-  "components": {}
+  "components": {
+    "mcp.example": {
+      "target": "/home/c/.config/opencode/mcps/example",
+      "enabled": false,
+      "source": {
+        "type": "git",
+        "url": "https://github.com/example/server.git",
+        "path": "source",
+        "track": "release"
+      }
+    }
+  }
 }
