@@ -205,18 +205,38 @@ func checkAll(ctx context.Context, value paths, report reporter) (checkSummary, 
 	}
 	results := map[string]checkResult{}
 	ids := managedComponentIDs(value, loaded.Components)
-	total := len(ids) + 1
-	for index, id := range ids {
-		if err := ctx.Err(); err != nil {
-			_ = saveState(value.StatePath, cached)
-			return checkSummary{}, err
+	jobs := make([]checkJob, 0, len(ids)+1)
+	for _, id := range ids {
+		jobs = append(jobs, checkJob{id: id, item: loaded.Components[id]})
+	}
+	jobs = append(jobs, checkJob{id: selfUpdateComponentID})
+	safe := newSafeReporter(report, len(jobs))
+	for _, job := range jobs {
+		safe.emit(progress{Phase: "check", Component: job.id, Detail: "checking"})
+	}
+	outcomes := make([]checkResult, len(jobs))
+	runBounded(ctx, loaded.Defaults.CheckConcurrency, jobs, func(worker context.Context, index int, job checkJob) error {
+		var result checkResult
+		if job.id == selfUpdateComponentID {
+			result = checkSelfUpdate(worker, value, loaded.Defaults)
+		} else {
+			result = checkComponent(worker, value, job.id, job.item, loaded.Defaults)
 		}
-		item := loaded.Components[id]
-		if report != nil {
-			report(progress{Phase: "check", Component: id, Detail: "checking", Current: index, Total: total})
+		outcomes[index] = result
+		safe.done(progress{Phase: "check", Component: job.id, Detail: result.Summary})
+		return nil
+	})
+	for index, job := range jobs {
+		result := outcomes[index]
+		if result.Status == "" {
+			continue
 		}
-		result := checkComponent(ctx, value, id, item, loaded.Defaults)
-		key := componentKey(id, item)
+		if job.id == selfUpdateComponentID {
+			recordSelfUpdateCheck(&cached, result)
+			results[job.id] = result
+			continue
+		}
+		key := componentKey(job.id, job.item)
 		entry := cached.Components[key]
 		entry.LastAttempt = &result
 		if isGoodStatus(result.Status) && validExact(result.Current) && validExact(result.Latest) {
@@ -224,31 +244,23 @@ func checkAll(ctx context.Context, value paths, report reporter) (checkSummary, 
 			entry.LastGood = &good
 		}
 		cached.Components[key] = entry
-		results[id] = result
-		if report != nil {
-			report(progress{Phase: "check", Component: id, Detail: result.Summary, Current: index + 1, Total: total})
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		_ = saveState(value.StatePath, cached)
-		return checkSummary{}, err
-	}
-	if report != nil {
-		report(progress{Phase: "check", Component: selfUpdateComponentID, Detail: "checking", Current: len(ids), Total: total})
-	}
-	self := checkSelfUpdate(ctx, value, loaded.Defaults)
-	recordSelfUpdateCheck(&cached, self)
-	results[selfUpdateComponentID] = self
-	if report != nil {
-		report(progress{Phase: "check", Component: selfUpdateComponentID, Detail: self.Summary, Current: total, Total: total})
+		results[job.id] = result
 	}
 	if err := saveState(value.StatePath, cached); err != nil {
 		return checkSummary{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return checkSummary{}, err
+	}
 	if report != nil {
-		report(progress{Phase: "complete", Detail: "check complete", Current: total, Total: total})
+		report(progress{Phase: "complete", Detail: "check complete", Current: len(jobs), Total: len(jobs)})
 	}
 	return checkSummary{Config: loaded, State: cached, Results: results}, nil
+}
+
+type checkJob struct {
+	id   string
+	item component
 }
 
 func managedComponentIDs(value paths, components map[string]component) []string {

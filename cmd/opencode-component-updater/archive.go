@@ -216,12 +216,19 @@ func verifyArchive(path string) (string, error) {
 	if err := file.Close(); err != nil {
 		return "", err
 	}
-	contents, err := os.ReadFile(path)
+	digestFile, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	hash := sha256.Sum256(contents)
-	return "sha256:" + hex.EncodeToString(hash[:]), nil
+	hash := sha256.New()
+	if _, err := io.Copy(hash, digestFile); err != nil {
+		digestFile.Close()
+		return "", err
+	}
+	if err := digestFile.Close(); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func pruneBackups(root string, keep int) error {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -118,6 +119,12 @@ func upgradeAll(ctx context.Context, value paths, bestEffort bool, report report
 		return err
 	}
 	staged, stageFailures := stageAll(ctx, value, summary.Config, plan, bestEffort, report)
+	if err := ctx.Err(); err != nil {
+		// Cancellation aborts the remaining stages; report it as cancellation so
+		// the CLI exits as interrupted instead of claiming a partial upgrade.
+		cleanupStages(staged)
+		return err
+	}
 	if len(stageFailures) > 0 && !bestEffort {
 		cleanupStages(staged)
 		return &preflightError{Failures: stageFailures}
@@ -253,27 +260,46 @@ func saveUpgradePlan(value paths, plan upgradePlan) error {
 func stageAll(ctx context.Context, value paths, settings config, plan upgradePlan, bestEffort bool, report reporter) ([]plannedComponent, []string) {
 	staged := []plannedComponent{}
 	failures := []string{}
+	total := len(plan.Components)
+	safe := newSafeReporter(report, total)
+	outcomes := make([]plannedComponent, total)
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	indices := make([]int, 0, total)
 	for index, componentPlan := range plan.Components {
-		if err := ctx.Err(); err != nil {
-			failures = append(failures, err.Error())
-			break
-		}
-		if report != nil {
-			report(progress{Phase: "stage", Component: componentPlan.ID, Detail: "staging", Current: index, Total: len(plan.Components)})
-		}
+		safe.emit(progress{Phase: "stage", Component: componentPlan.ID, Detail: "staging"})
+		indices = append(indices, index)
+	}
+	stage := func(worker context.Context, index int) error {
+		componentPlan := plan.Components[index]
 		item := settings.Components[componentPlan.ID]
-		stagedPlan, err := stageComponent(ctx, value, settings.Defaults, item, componentPlan)
+		stagedPlan, err := stageComponent(worker, value, settings.Defaults, item, componentPlan)
 		if err != nil {
-			failures = append(failures, componentPlan.ID+": "+sanitizeSummary(err.Error()))
 			if !bestEffort {
-				break
+				cancel()
 			}
+			return err
+		}
+		outcomes[index] = stagedPlan
+		safe.done(progress{Phase: "stage", Component: componentPlan.ID, Detail: "ready"})
+		return nil
+	}
+	errs := runBounded(workerCtx, settings.Defaults.StageConcurrency, indices, func(worker context.Context, _ int, index int) error {
+		return stage(worker, index)
+	})
+
+	for index, componentPlan := range plan.Components {
+		if err := errs[index]; err != nil {
+			// Failures caused only by aborting the remaining stages would hide
+			// the real failure.
+			if !bestEffort && len(failures) > 0 && errors.Is(err, context.Canceled) {
+				continue
+			}
+			failures = append(failures, componentPlan.ID+": "+sanitizeSummary(err.Error()))
 			continue
 		}
-		staged = append(staged, stagedPlan)
-		if report != nil {
-			report(progress{Phase: "stage", Component: componentPlan.ID, Detail: "ready", Current: index + 1, Total: len(plan.Components)})
-		}
+		staged = append(staged, outcomes[index])
 	}
 	if len(failures) > 0 && !bestEffort {
 		cleanupStages(staged)

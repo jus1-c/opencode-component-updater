@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -737,6 +738,152 @@ func TestRecoveryRestoresInterruptedSwap(t *testing.T) {
 	}
 	if _, err := os.Stat(value.JournalPath); !os.IsNotExist(err) {
 		t.Fatalf("journal should be removed: %v", err)
+	}
+}
+
+func TestApplyArchivesEveryCommittedBackupConcurrently(t *testing.T) {
+	withoutLiveOpenCode(t)
+	root := t.TempDir()
+	value := testPaths(root)
+	items := map[string]component{}
+	for _, name := range []string{"a", "b", "c"} {
+		target := filepath.Join(root, "component-"+name)
+		if err := os.MkdirAll(filepath.Join(target, "runtime"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "runtime", "version.txt"), []byte("old\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		item := discoveredComponent("plugin", name, &target)
+		item.Enabled = true
+		item.Policy.Apply = "manifest"
+		item.Policy.AllowedPaths = []string{"runtime"}
+		item.Check.Command = []string{"sh", "-c", `printf '{"schemaVersion":1,"status":"update-available","current":"1.0.0","latest":"1.1.0"}' > "$OPENCODE_UPDATER_CHECK_RESULT"`}
+		item.Update.Command = []string{"sh", "-c", `mkdir -p "$OPENCODE_UPDATER_STAGE/runtime"; printf new > "$OPENCODE_UPDATER_STAGE/runtime/version.txt"; printf '{"schemaVersion":2,"planSha256":"%s","paths":["runtime"]}' "$OPENCODE_UPDATER_PLAN_SHA256" > "$OPENCODE_UPDATER_MANIFEST"`}
+		items["plugin."+name] = item
+	}
+	if err := saveConfig(value.ConfigPath, config{SchemaVersion: configSchemaVersion, Defaults: defaultDefaults(), Components: items}); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgradeAll(context.Background(), value, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		archives, err := filepath.Glob(filepath.Join(value.BackupRoot, "plugin."+name, "*.tar.gz"))
+		if err != nil || len(archives) != 1 {
+			t.Fatalf("%s: expected one archive, got %v %v", name, archives, err)
+		}
+		if _, err := verifyArchive(archives[0]); err != nil {
+			t.Fatalf("%s: archive does not verify: %v", name, err)
+		}
+	}
+	state, err := loadState(value.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		item := items["plugin."+name]
+		if entry := state.Components[componentKey("plugin."+name, item)]; entry.LastApplied == nil {
+			t.Fatalf("%s: last applied not finalized: %#v", name, entry)
+		}
+	}
+	if _, err := os.Stat(value.JournalPath); !os.IsNotExist(err) {
+		t.Fatalf("journal should be removed: %v", err)
+	}
+}
+
+func TestRecoveryFinishesArchivingPhase(t *testing.T) {
+	withoutLiveOpenCode(t)
+	root := t.TempDir()
+	value := testPaths(root)
+	target := filepath.Join(root, "component")
+	if err := os.MkdirAll(filepath.Join(target, "runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "runtime", "version.txt"), []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := filepath.Join(root, "raw-backup")
+	if err := os.MkdirAll(filepath.Join(raw, "runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(raw, "runtime", "version.txt"), []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item := discoveredComponent("plugin", "example", &target)
+	journal := journal{
+		SchemaVersion: 1,
+		RunID:         "test-run",
+		Mode:          "strict",
+		Phase:         "archiving",
+		Components: []journalComponent{{
+			ID:        "plugin.example",
+			Target:    target,
+			Stage:     filepath.Join(root, "stage"),
+			RawBackup: raw,
+			Committed: true,
+			Moves:     []journalMove{{Path: "runtime", OldExisted: true, OldMoved: true, NewMoved: true}},
+			Plan: plannedComponent{
+				ID:       "plugin.example",
+				Key:      componentKey("plugin.example", item),
+				Target:   target,
+				Current:  "1.0.0",
+				Latest:   "1.1.0",
+				Manifest: stageManifest{Paths: []string{"runtime"}},
+			},
+		}},
+	}
+	if err := saveJournal(value, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverTransaction(value, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(value.BackupRoot, "plugin.example", "test-run.tar.gz")); err != nil {
+		t.Fatalf("recovery did not archive the committed backup: %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(target, "runtime", "version.txt"))
+	if err != nil || string(contents) != "new\n" {
+		t.Fatalf("recovery rolled back a committed swap: %q %v", contents, err)
+	}
+	if _, err := os.Stat(value.JournalPath); !os.IsNotExist(err) {
+		t.Fatalf("journal should be removed: %v", err)
+	}
+}
+
+func TestCancelledStageReportsCancellationNotPartial(t *testing.T) {
+	withoutLiveOpenCode(t)
+	root := t.TempDir()
+	value := testPaths(root)
+	target := filepath.Join(root, "component")
+	if err := os.MkdirAll(filepath.Join(target, "runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "runtime", "version.txt"), []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item := discoveredComponent("plugin", "example", &target)
+	item.Enabled = true
+	item.Policy.Apply = "manifest"
+	item.Policy.AllowedPaths = []string{"runtime"}
+	item.Check.Command = []string{"sh", "-c", `printf '{"schemaVersion":1,"status":"update-available","current":"1.0.0","latest":"1.1.0"}' > "$OPENCODE_UPDATER_CHECK_RESULT"`}
+	item.Update.Command = []string{"sh", "-c", `sleep 0.3; mkdir -p "$OPENCODE_UPDATER_STAGE/runtime"; printf new > "$OPENCODE_UPDATER_STAGE/runtime/version.txt"; printf '{"schemaVersion":2,"planSha256":"%s","paths":["runtime"]}' "$OPENCODE_UPDATER_PLAN_SHA256" > "$OPENCODE_UPDATER_MANIFEST"`}
+	if err := saveConfig(value.ConfigPath, config{SchemaVersion: configSchemaVersion, Defaults: defaultDefaults(), Components: map[string]component{"plugin.example": item}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(150*time.Millisecond, cancel)
+	err := upgradeAll(ctx, value, false, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled stage reported %v instead of context.Canceled", err)
+	}
+	var partial *partialUpgradeError
+	if errors.As(err, &partial) {
+		t.Fatalf("cancellation must not be reported as a partial upgrade: %v", partial.Failures)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(target, "runtime", "version.txt"))
+	if readErr != nil || string(contents) != "old\n" {
+		t.Fatalf("cancelled staging changed the target: %q %v", contents, readErr)
 	}
 }
 

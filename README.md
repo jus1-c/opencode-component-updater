@@ -56,10 +56,13 @@ opencode-component-updater doctor
 ```
 
 - `check` is read-only for component targets. It refreshes metadata and retains
-  a valid prior result when a later check fails.
+  a valid prior result when a later check fails. Checks run concurrently, up to
+  `defaults.checkConcurrency`.
 - `upgrade` force-checks, stages every strict update, then applies by
-  journaled same-filesystem renames. `--best-effort` skips failed components
-  and exits `4` for a partial result.
+  journaled same-filesystem renames. Staging runs concurrently, up to
+  `defaults.stageConcurrency`, while apply, rollback, and recovery stay
+  sequential. `--best-effort` skips failed components and exits `4` for a
+  partial result.
 - `rollback` restores a verified backup. A component ID is required outside an
   interactive terminal.
 - `self-update` is explicit. Ordinary `upgrade` never upgrades this updater.
@@ -92,6 +95,10 @@ every discovered MCP and plugin, including disabled external components.
 Component IDs carry kind and name (`mcp.example`, `plugin.example`), so compact
 entries normally need only `enabled`, `target`, and `source`. Scope, safe policy
 defaults, and empty command/path lists are inferred.
+
+Concurrency defaults are `checkConcurrency: 16`, `stageConcurrency: 8`, and
+`archiveConcurrency: 4`. Set any of them to `1` to reproduce the sequential
+path. Staging and archiving never overlap apply, rollback, or recovery.
 
 Built-in sources remove per-component command wiring:
 

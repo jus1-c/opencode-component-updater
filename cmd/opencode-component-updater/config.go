@@ -35,6 +35,9 @@ type defaults struct {
 	CheckTimeoutMS     int `json:"checkTimeoutMs"`
 	UpdateTimeoutMS    int `json:"updateTimeoutMs"`
 	MaxOutputBytes     int `json:"maxOutputBytes"`
+	CheckConcurrency   int `json:"checkConcurrency"`
+	StageConcurrency   int `json:"stageConcurrency"`
+	ArchiveConcurrency int `json:"archiveConcurrency"`
 }
 
 type config struct {
@@ -183,6 +186,9 @@ func defaultDefaults() defaults {
 		CheckTimeoutMS:     60_000,
 		UpdateTimeoutMS:    1_800_000,
 		MaxOutputBytes:     65_536,
+		CheckConcurrency:   16,
+		StageConcurrency:   8,
+		ArchiveConcurrency: 4,
 	}
 }
 
@@ -215,6 +221,18 @@ func normalizeConfig(input config) (config, error) {
 	}
 	if output.Defaults.MaxOutputBytes <= 0 {
 		output.Defaults.MaxOutputBytes = fallback.MaxOutputBytes
+	}
+	for _, item := range []struct {
+		value    *int
+		fallback int
+	}{
+		{&output.Defaults.CheckConcurrency, fallback.CheckConcurrency},
+		{&output.Defaults.StageConcurrency, fallback.StageConcurrency},
+		{&output.Defaults.ArchiveConcurrency, fallback.ArchiveConcurrency},
+	} {
+		if *item.value <= 0 {
+			*item.value = item.fallback
+		}
 	}
 	for id, item := range output.Components {
 		kind, name, found := strings.Cut(id, ".")

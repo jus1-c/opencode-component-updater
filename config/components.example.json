@@ -4,7 +4,10 @@
     "checkIntervalHours": 24,
     "checkTimeoutMs": 60000,
     "updateTimeoutMs": 1800000,
-    "maxOutputBytes": 65536
+    "maxOutputBytes": 65536,
+    "checkConcurrency": 16,
+    "stageConcurrency": 8,
+    "archiveConcurrency": 4
   },
   "components": {
     "mcp.example": {
