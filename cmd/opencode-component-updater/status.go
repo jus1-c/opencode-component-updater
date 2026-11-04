@@ -31,6 +31,7 @@ func printStatus(value paths, out io.Writer) error {
 	sections := []string{strings.Join([]string{
 		statusField("Config", configState),
 		statusField("Processes", fmt.Sprint(len(processes))),
+		statusField("Live mode", liveModeLabel()),
 		statusField("Journal", fileState(value.JournalPath)),
 		statusField("Backups", fmt.Sprint(backupCount(value.BackupRoot))),
 	}, "\n")}
@@ -91,6 +92,7 @@ func printDoctor(value paths, out io.Writer) error {
 		doctorLine(fileState(value.JournalPath) == "present", "journal", fileState(value.JournalPath)),
 		doctorLine(pathContainsExecutable(), "binary in PATH", fmt.Sprint(pathContainsExecutable())),
 		doctorLine(fileState(value.PluginRoot) == "present", "updater plugin", doctorState(fileState(value.PluginRoot) == "present", value.PluginRoot)),
+		doctorLine(detectLiveService() != "", "live reload", liveModeLabel()),
 	}
 	if processErr != nil {
 		lines = append(lines, "", doctorLine(false, "OpenCode processes", processErr.Error()))
@@ -180,6 +182,18 @@ func fallback(value, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+// liveModeLabel describes whether component changes can be applied without a
+// restart.
+func liveModeLabel() string {
+	if version := detectLiveService(); version != "" {
+		return "live reload (OpenCode " + version + ")"
+	}
+	if allowRunning || os.Getenv("OPENCODE_COMPONENT_UPDATER_ALLOW_RUNNING") == "1" {
+		return "forced (--allow-running)"
+	}
+	return "requires OpenCode exit"
 }
 
 func sortedStrings(values []string) []string {

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,6 +19,46 @@ type openCodeRunningError struct {
 
 var findOpenCodeProcesses = listOpenCodeProcesses
 
+// allowRunning lets a caller apply changes while OpenCode stays up. OpenCode V2
+// reloads locations from disk, so a restart is no longer required.
+var allowRunning bool
+
+var (
+	liveServiceOnce    sync.Once
+	liveServiceVersion string
+	probeLiveService   = func() string {
+		output := runCommand(context.Background(), []string{"opencode", "api", "get", "/api/info"}, "", nil, 5_000, 8_192)
+		if output.Code != 0 || output.Reason != "" {
+			return ""
+		}
+		var info struct {
+			Version string `json:"version"`
+		}
+		if json.Unmarshal([]byte(output.Stdout), &info) != nil {
+			return ""
+		}
+		return info.Version
+	}
+)
+
+// detectLiveService reports the running OpenCode server version when it supports
+// live reload, or "" when no compatible server answers.
+func detectLiveService() string {
+	liveServiceOnce.Do(func() {
+		liveServiceVersion = probeLiveService()
+	})
+	return liveServiceVersion
+}
+
+// liveApplyAllowed reports whether component changes may be applied without
+// waiting for OpenCode to exit.
+func liveApplyAllowed() bool {
+	if allowRunning || os.Getenv("OPENCODE_COMPONENT_UPDATER_ALLOW_RUNNING") == "1" {
+		return true
+	}
+	return detectLiveService() != ""
+}
+
 func (err *openCodeRunningError) Error() string {
 	lines := []string{"OpenCode is still running; close every OpenCode process before changing components."}
 	for _, process := range err.Processes {
@@ -26,6 +68,9 @@ func (err *openCodeRunningError) Error() string {
 }
 
 func ensureNoOpenCodeProcesses() error {
+	if liveApplyAllowed() {
+		return nil
+	}
 	processes, err := findOpenCodeProcesses()
 	if err != nil {
 		return err
@@ -98,7 +143,7 @@ func (model processGuardModel) View() tea.View {
 	for _, process := range model.processes {
 		lines = append(lines, fmt.Sprintf("%s  %s", componentStyle.Render(fmt.Sprintf("%-7d", process.PID)), dimStyle.Render(fallback(process.Executable, process.Command))))
 	}
-	lines = append(lines, "", bodyStyle.Render("Close every OpenCode process before changing components."), "", keyHint("r", "retry")+"    "+keyHint("q", "cancel"))
+	lines = append(lines, "", bodyStyle.Render("Close every OpenCode process, or run with --allow-running to apply live."), "", keyHint("r", "retry")+"    "+keyHint("q", "cancel"))
 	return tea.NewView(panel("OpenCode Component Updater", strings.Join(lines, "\n"), clamp(model.width-2, 20, 100), yellow) + "\n")
 }
 

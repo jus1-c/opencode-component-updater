@@ -34,6 +34,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	allowRunning = hasFlag(args[1:], "--allow-running")
+	if allowRunning {
+		args = append([]string{args[0]}, removeFlag(args[1:], "--allow-running")...)
+	}
+
 	switch args[0] {
 	case "version":
 		writeStyled(stdout, fmt.Sprintf("%s  %s  %s", titleStyle.Render("opencode-component-updater"), bodyStyle.Render(version), dimStyle.Render(commit)))
@@ -130,6 +135,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+func hasFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
+func removeFlag(args []string, flag string) []string {
+	output := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg != flag {
+			output = append(output, arg)
+		}
+	}
+	return output
+}
+
 func parseCheckArgs(args []string) (bool, error) {
 	quiet := false
 	for _, arg := range args {
@@ -172,9 +196,9 @@ func parseRollbackArgs(args []string) (string, error) {
 func printUsage(out io.Writer) {
 	commands := []struct{ name, args, description string }{
 		{"check", "[--quiet]", "Check all components for updates"},
-		{"upgrade", "[--best-effort]", "Upgrade managed components"},
-		{"rollback", "[component-id]", "Restore a previous backup"},
-		{"self-update", "[check|apply [commit]|rollback]", "Manage the updater itself"},
+		{"upgrade", "[--best-effort] [--allow-running]", "Upgrade managed components"},
+		{"rollback", "[component-id] [--allow-running]", "Restore a previous backup"},
+		{"self-update", "[check|apply [commit]|rollback] [--allow-running]", "Manage the updater itself"},
 		{"status", "", "Show component status"},
 		{"doctor", "", "Diagnose configuration and targets"},
 		{"version", "", "Print version and commit"},

@@ -48,9 +48,9 @@ OPENCODE_COMPONENT_UPDATER_REPOSITORY
 
 ```text
 opencode-component-updater check [--quiet]
-opencode-component-updater upgrade [--best-effort]
-opencode-component-updater rollback [component-id]
-opencode-component-updater self-update [check|apply [commit]|rollback]
+opencode-component-updater upgrade [--best-effort] [--allow-running]
+opencode-component-updater rollback [component-id] [--allow-running]
+opencode-component-updater self-update [check|apply [commit]|rollback] [--allow-running]
 opencode-component-updater status
 opencode-component-updater doctor
 ```
@@ -63,8 +63,27 @@ opencode-component-updater doctor
 - `rollback` restores a verified backup. A component ID is required outside an
   interactive terminal.
 - `self-update` is explicit. Ordinary `upgrade` never upgrades this updater.
-- Every mutating command blocks until every OpenCode process is closed. It
-  never sends a signal, kills a process, or starts/stops OpenCode.
+- Every mutating command refuses to run while OpenCode is open **unless a live
+  OpenCode V2 service answers `/api/info`**, in which case it applies
+  immediately. `--allow-running` (or `OPENCODE_COMPONENT_UPDATER_ALLOW_RUNNING=1`)
+  forces that behavior. It never sends a signal, kills a process, or
+  starts/stops OpenCode.
+
+## OpenCode Plugin
+
+The plugin is a V2 CLI plugin, loaded from `cli.json`, with a no-op server
+entrypoint so the package can also be listed in `opencode.json`.
+
+```text
+/component-status      list components and show one component's detail
+/component-update      confirm, run `upgrade --allow-running`, reload locations
+/component-rollback    pick a component, restore its last backup
+```
+
+`/component-update` streams updater progress into toasts and calls
+`POST /api/location/reload` only after a clean exit, so the new code is live
+without restarting OpenCode. A partial exit (`4`) or an error shows the failure
+tail in a dialog and does not reload.
 
 ## Component Configuration
 
