@@ -350,9 +350,14 @@ func selfUpdateTargetComponents(value paths) (selfUpdateTargets, error) {
 		return selfUpdateTargets{}, err
 	}
 	binary := selfUpdateComponent(selfUpdateBinaryID, "binary", binaryTarget, []string{filepath.Base(executable)})
-	plugin := selfUpdateComponent(selfUpdatePluginID, "plugin", value.PluginRoot, []string{"index.js", "package.json", "src"})
+	plugin := selfUpdateComponent(selfUpdatePluginID, "plugin", value.PluginRoot, selfUpdatePluginFiles)
 	return selfUpdateTargets{Binary: binary, Plugin: plugin}, nil
 }
+
+// selfUpdatePluginFiles are the plugin entrypoints OpenCode V2 discovers. Every
+// one must travel with a plugin update; leaving one behind keeps discovery
+// pointing at the old tree.
+var selfUpdatePluginFiles = []string{"index.js", "server.js", "tui.js", "package.json", "src"}
 
 func selfUpdateComponent(id, name, target string, allowed []string) component {
 	item := component{Scope: "updater", Kind: "plugin", Name: name, Target: &target, Enabled: true}
@@ -421,7 +426,7 @@ func stageSelfUpdateCandidate(ctx context.Context, value paths, result checkResu
 	if err := assertCandidateFile(binaryPath); err != nil {
 		return upgradePlan{}, nil, err
 	}
-	for _, name := range []string{"index.js", "package.json", "src"} {
+	for _, name := range selfUpdatePluginFiles {
 		if err := copySafeTree(filepath.Join(source, name), filepath.Join(pluginStage, name)); err != nil {
 			return upgradePlan{}, nil, err
 		}

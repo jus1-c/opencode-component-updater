@@ -5,6 +5,12 @@ import { resolveUpdaterPaths } from "./paths.js";
 const statusCommandID = "opencode-component-updater.status";
 const updateCommandID = "opencode-component-updater.update";
 const rollbackCommandID = "opencode-component-updater.rollback";
+// Ordinary upgrade never updates the updater, so offering it would repeat forever.
+const selfUpdateID = "plugin.opencode-component-updater";
+
+function upgradableComponents(snapshot) {
+  return snapshot.components.filter((item) => item.id !== selfUpdateID && item.status === "update-available");
+}
 
 function notify(context, message, variant = "info") {
   context.ui.toast.show({ message, variant });
@@ -98,7 +104,7 @@ async function showStatus(context, paths, readSnapshot, monitorError) {
 
 async function runUpgrade(context, paths, runCommand, readSnapshot) {
   const snapshot = await readSnapshot({ paths })
-  const available = snapshot.components.filter((item) => item.status === "update-available")
+  const available = upgradableComponents(snapshot)
   const detail = available.length === 0
     ? "No cached updates. The updater re-checks every component before applying."
     : `Updates available:\n${available.map((item) => `  ${item.id}  ${item.summary}`).join("\n")}`
@@ -192,7 +198,7 @@ export function createTuiPlugin({
         await runCheck({ pluginRoot: paths.pluginRoot })
         monitorError = null
         const snapshot = await readSnapshot({ paths })
-        const available = snapshot.components.filter((item) => item.status === "update-available")
+        const available = upgradableComponents(snapshot)
         if (available.length) {
           notify(
             context,

@@ -655,7 +655,7 @@ func selfUpdateTestRepository(t *testing.T, root string) (string, string, string
 	if err := os.MkdirAll(repository, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"go.mod", "go.sum", "cmd", "index.js", "package.json", "src"} {
+	for _, name := range []string{"go.mod", "go.sum", "cmd", "index.js", "server.js", "tui.js", "package.json", "src"} {
 		if err := copySafeTree(filepath.Join(projectRoot, name), filepath.Join(repository, name)); err != nil {
 			t.Fatal(err)
 		}
@@ -884,6 +884,45 @@ func TestCancelledStageReportsCancellationNotPartial(t *testing.T) {
 	contents, readErr := os.ReadFile(filepath.Join(target, "runtime", "version.txt"))
 	if readErr != nil || string(contents) != "old\n" {
 		t.Fatalf("cancelled staging changed the target: %q %v", contents, readErr)
+	}
+}
+
+func TestSelfUpdateIncludesPluginRootEntrypoints(t *testing.T) {
+	allowed := strings.Join(selfUpdatePluginFiles, ",")
+	for _, name := range []string{"server.js", "tui.js"} {
+		if !strings.Contains(allowed, name) {
+			t.Fatalf("self-update would leave %s stale: allowed paths %s", name, allowed)
+		}
+	}
+}
+
+func TestSelfUpdateTargetsIncludeSourceEntrypoints(t *testing.T) {
+	withoutLiveOpenCode(t)
+	root := t.TempDir()
+	value := testPaths(root)
+	executable := filepath.Join(root, "bin", "opencode-component-updater")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(value.PluginRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previous := selfUpdateExecutable
+	selfUpdateExecutable = func() (string, error) { return executable, nil }
+	t.Cleanup(func() { selfUpdateExecutable = previous })
+
+	targets, err := selfUpdateTargetComponents(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := strings.Join(targets.Plugin.Policy.AllowedPaths, ",")
+	for _, name := range []string{"server.js", "tui.js", "src"} {
+		if !strings.Contains(allowed, name) {
+			t.Fatalf("self-update target omits %s: %s", name, allowed)
+		}
 	}
 }
 

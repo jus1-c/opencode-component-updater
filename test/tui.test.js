@@ -133,6 +133,63 @@ test("component-update reports partial failure without reloading", async () => {
   assert.match(alert.message, /manifest path is protected/);
 });
 
+test("component-update does not offer the updater itself", async () => {
+  const commands = [];
+  const { context, dialogs } = createContext({ commands, answers: [true] });
+  const snapshot = {
+    checkIntervalHours: 24,
+    components: [
+      { id: "plugin.quota", status: "update-available", summary: "4.4.0 -> 4.5.0" },
+      { id: "plugin.opencode-component-updater", status: "update-available", summary: "aaa -> bbb" },
+    ],
+  };
+
+  const setup = createTuiPlugin({
+    pluginRoot: "/lab/plugin",
+    readSnapshot: async () => snapshot,
+    runCheck: async () => {},
+    runCommand: async () => 0,
+    setIntervalImpl: () => ({ unref() {} }),
+    clearIntervalImpl: () => {},
+  });
+
+  await setup(context);
+  await commands.find((command) => command.slash.name === "component-update").run();
+
+  const confirm = dialogs.find((dialog) => dialog.kind === "confirm");
+  assert.match(confirm.message, /plugin\.quota/);
+  assert.doesNotMatch(confirm.message, /opencode-component-updater/);
+});
+
+test("automatic check does not warn about the updater itself", async () => {
+  let scheduled;
+  const { context, toasts } = createContext({ commands: [] });
+  const snapshot = {
+    checkIntervalHours: 24,
+    components: [
+      { id: "plugin.opencode-component-updater", status: "update-available", summary: "aaa -> bbb" },
+    ],
+  };
+
+  const setup = createTuiPlugin({
+    pluginRoot: "/lab/plugin",
+    readSnapshot: async () => snapshot,
+    runCheck: async () => {},
+    setIntervalImpl: (callback) => {
+      scheduled = callback;
+      return { unref() {} };
+    },
+    clearIntervalImpl: () => {},
+  });
+
+  await setup(context);
+  await new Promise((resolve) => setImmediate(resolve));
+  scheduled();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(!toasts.some((toast) => /update/i.test(toast.message)));
+});
+
 test("component-update does nothing when cancelled", async () => {
   const commands = [];
   const { context, reloads } = createContext({ commands, answers: [false] });
